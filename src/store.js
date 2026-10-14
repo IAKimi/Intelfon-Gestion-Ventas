@@ -62,6 +62,8 @@ const DEFAULT_STATE = {
       tipos_visita: [],
       tipos_transporte: [],
       tipos_pago: [],
+      transporte_default: '',
+      pago_combustible_default: '',
     },
     {
       id: 'vend-1',
@@ -79,6 +81,8 @@ const DEFAULT_STATE = {
       tipos_visita: [],
       tipos_transporte: [],
       tipos_pago: [],
+      transporte_default: 'Moto',
+      pago_combustible_default: 'Pago por conteo',
     },
   ],
 };
@@ -95,6 +99,8 @@ function normalizeUser(u) {
     tipos_visita: Array.isArray(u.tipos_visita) ? u.tipos_visita : [],
     tipos_transporte: Array.isArray(u.tipos_transporte) ? u.tipos_transporte : [],
     tipos_pago: Array.isArray(u.tipos_pago) ? u.tipos_pago : [],
+    transporte_default: String(u.transporte_default || '').trim(),
+    pago_combustible_default: String(u.pago_combustible_default || '').trim(),
   };
 }
 
@@ -261,19 +267,22 @@ export async function initStore() {
 
 export function getState() {
   const data = ensureMemory();
-  if (remoteMode) {
-    return { ...data, session: data.session || null };
+  let session = data.session || null;
+  if (!remoteMode) {
+    const sessionRaw = sessionStorage.getItem('red-session');
+    if (sessionRaw) {
+      try {
+        session = JSON.parse(sessionRaw);
+      } catch {
+        session = null;
+      }
+    }
   }
-  const sessionRaw = sessionStorage.getItem('red-session');
-  let session = null;
-  if (sessionRaw) {
-    try {
-      const partial = JSON.parse(sessionRaw);
-      const fresh = data.users.find((u) => u.id === partial.id);
-      session = fresh ? normalizeUser({ ...fresh, password: undefined }) : partial;
+  if (session?.id) {
+    const fresh = data.users.find((u) => u.id === session.id);
+    if (fresh) {
+      session = normalizeUser({ ...fresh, password: undefined });
       delete session.password;
-    } catch {
-      session = null;
     }
   }
   return { ...data, session };

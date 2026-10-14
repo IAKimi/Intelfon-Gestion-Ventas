@@ -546,26 +546,39 @@ function renderHome() {
   }
 }
 
-function field(label, name, { type = 'text', required = true, value = '', placeholder = '', rows } = {}) {
+function field(label, name, { type = 'text', required = true, value = '', placeholder = '', rows, disabled = false, readonly = false } = {}) {
+  const lockCls = disabled || readonly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white';
+  const lockAttr = disabled ? 'disabled' : readonly ? 'readonly' : '';
   if (type === 'textarea') {
     return `
       <div>
         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">${label}</label>
-        <textarea name="${name}" rows="${rows || 3}" ${required ? 'required' : ''} placeholder="${placeholder}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">${escapeHtml(value)}</textarea>
+        <textarea name="${name}" rows="${rows || 3}" ${required && !disabled ? 'required' : ''} ${lockAttr} placeholder="${placeholder}" class="w-full rounded-xl border border-slate-200 ${lockCls} px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">${escapeHtml(value)}</textarea>
       </div>`;
   }
   if (type === 'select') {
     return `
       <div>
         <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">${label}</label>
-        <select name="${name}" ${required ? 'required' : ''} class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">${value}</select>
+        <select name="${name}" ${required && !disabled ? 'required' : ''} ${lockAttr} class="w-full rounded-xl border border-slate-200 ${lockCls} px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">${value}</select>
       </div>`;
   }
   return `
     <div>
       <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">${label}</label>
-      <input name="${name}" type="${type}" ${required ? 'required' : ''} value="${escapeHtml(value)}" placeholder="${placeholder}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+      <input name="${name}" type="${type}" ${required && !disabled ? 'required' : ''} ${lockAttr} value="${escapeHtml(value)}" placeholder="${placeholder}" class="w-full rounded-xl border border-slate-200 ${lockCls} px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
     </div>`;
+}
+
+function catalogOptionsHtml(items, selectedLabel = '') {
+  const active = (items || []).filter((x) => x.activo !== false);
+  const opts = active
+    .map(
+      (x) =>
+        `<option value="${escapeHtml(x.label)}" ${x.label === selectedLabel ? 'selected' : ''}>${escapeHtml(x.label)}</option>`
+    )
+    .join('');
+  return `<option value="">Seleccione…</option>${opts}`;
 }
 
 function bindFormSubmit(formId, handler) {
@@ -716,7 +729,7 @@ function renderVisitaBacklog() {
 }
 
 function renderVisitaForm(salidaId) {
-  const { fecha, hora } = nowParts();
+  const { hora } = nowParts();
   const user = getState().session;
   const salida = getSalidaById(salidaId);
   if (!salida || salida.vendedorId !== user.id || salida.estado !== 'pendiente') {
@@ -726,17 +739,18 @@ function renderVisitaForm(salidaId) {
   }
 
   const tiposVisita = resolveOptions(user, 'tipos_visita');
-  const transportes = resolveOptions(user, 'tipos_transporte');
-  const pagos = resolveOptions(user, 'tipos_pago');
+  const transporteDefault = user.transporte_default || '';
+  const pagoDefault = user.pago_combustible_default || '';
+  const fechaReporte = salida.fecha_registro_salida || '';
 
   app.innerHTML = shell(
     `
-    <form id="form-visita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <form id="form-visita" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:space-y-6 sm:p-6">
       ${locationBannerHtml()}
-      <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+      <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm leading-relaxed text-slate-600">
         Datos de la <strong>salida</strong> (solo lectura). Al enviar se captura el <strong>GPS actual</strong> como punto B.
       </div>
-      <div class="grid gap-2 sm:grid-cols-2">
+      <div class="grid gap-3 sm:grid-cols-2 sm:gap-4">
         ${readonlyInfo('Fecha salida', salida.fecha_registro_salida)}
         ${readonlyInfo('Hora salida', salida.hora_registro_salida)}
         ${readonlyInfo('Cliente', salida.cliente_registro_salida)}
@@ -747,37 +761,43 @@ function renderVisitaForm(salidaId) {
         <div class="sm:col-span-2">${readonlyInfo('GPS salida (punto A)', `${salida.latitud_registro_salidas}, ${salida.longitud_registro_salidas}`)}</div>
       </div>
 
-      <div class="border-t border-slate-100 pt-4">
-        <h3 class="mb-3 text-xs font-black uppercase tracking-wider text-red-700">Completar visita</h3>
-        <div class="grid gap-4 sm:grid-cols-2">
-          ${field('Fecha del reporte', 'fecha_reporte_visitas', { type: 'date', value: fecha })}
+      <div class="space-y-4 border-t border-slate-100 pt-5 sm:space-y-5">
+        <h3 class="text-xs font-black uppercase tracking-wider text-red-700">Completar visita</h3>
+        <div class="grid gap-4 sm:grid-cols-2 sm:gap-5">
+          ${field('Fecha del reporte', 'fecha_reporte_visitas', {
+            type: 'date',
+            value: fechaReporte,
+            disabled: true,
+          })}
           ${field('Hora del reporte', 'hora_reporte_visitas', { type: 'time', value: hora })}
         </div>
+        <p class="text-[11px] leading-relaxed text-slate-400">La fecha debe coincidir con el día de la salida. Solo puede ajustar la hora del reporte.</p>
         ${field('Tipo de visita', 'tipo_visita', {
           type: 'select',
           required: tiposVisita.length > 0,
           value: optionsHtml(tiposVisita),
         })}
-        ${field('Informe / resultado', 'informe_visitas', { type: 'textarea', placeholder: '¿Qué ocurrió en la visita?' })}
-        ${field('Tareas pendientes', 'tareas_pendientes_reporte_visitas', { type: 'textarea', required: false })}
-        <div class="grid gap-4 sm:grid-cols-2">
-          ${field('Tipo de transporte', 'tipo_transporte', {
-            type: 'select',
-            required: transportes.length > 0,
-            value: optionsHtml(transportes),
-          })}
-          ${field('Tipo de pago combustible', 'tipo_pago_combustible', {
-            type: 'select',
-            required: pagos.length > 0,
-            value: optionsHtml(pagos),
-          })}
+        ${field('Informe / resultado', 'informe_visitas', {
+          type: 'textarea',
+          rows: 4,
+          placeholder: '¿Qué ocurrió en la visita?',
+        })}
+        ${field('Tareas pendientes', 'tareas_pendientes_reporte_visitas', {
+          type: 'textarea',
+          rows: 3,
+          required: false,
+        })}
+        <div class="grid gap-4 sm:grid-cols-2 sm:gap-5">
+          ${readonlyInfo('Tipo de transporte', transporteDefault || 'Sin asignar (configure en Admin → Usuarios)')}
+          ${readonlyInfo('Tipo de pago combustible', pagoDefault || 'Sin asignar (configure en Admin → Usuarios)')}
         </div>
-        <div class="mt-4">
+        <p class="text-[11px] leading-relaxed text-slate-400">Transporte y pago los define el administrador en su perfil. Se envían así al reporte.</p>
+        <div>
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica</label>
-          <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm" />
+          <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm" />
         </div>
       </div>
-      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Reportar visita</button>
+      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-4 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Reportar visita</button>
     </form>
     `,
     { title: 'Completar visita', showBack: true, backTo: '/visita' }
@@ -789,6 +809,12 @@ function renderVisitaForm(salidaId) {
     if (!current || current.estado !== 'pendiente') {
       throw new Error('La salida ya no está pendiente.');
     }
+    const freshUser = getState().session;
+    const transporte = freshUser?.transporte_default || '';
+    const pago = freshUser?.pago_combustible_default || '';
+    if (!transporte || !pago) {
+      throw new Error('Su perfil no tiene transporte o pago asignados. Contacte al administrador.');
+    }
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
     const file = form.querySelector('input[name="foto"]').files[0];
@@ -797,7 +823,6 @@ function renderVisitaForm(salidaId) {
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'reportes_visitas',
-      // Reciclados de la salida
       fecha_registro_salida: current.fecha_registro_salida,
       hora_registro_salida: current.hora_registro_salida,
       cliente_registro_salida: current.cliente_registro_salida,
@@ -808,8 +833,7 @@ function renderVisitaForm(salidaId) {
       latitud_registro_salidas: current.latitud_registro_salidas,
       longitud_registro_salidas: current.longitud_registro_salidas,
       gps_accuracy_salida: current.gps_accuracy_salida,
-      // Campos del reporte (visita)
-      fecha_reporte_visitas: data.fecha_reporte_visitas,
+      fecha_reporte_visitas: current.fecha_registro_salida,
       hora_reporte_visitas: data.hora_reporte_visitas,
       cliente_reporte_visitas: current.cliente_registro_salida,
       contacto_reporte_visitas: current.contacto_registro_salida,
@@ -818,9 +842,8 @@ function renderVisitaForm(salidaId) {
       objetivo_visita: current.objetivo_registro_salida,
       informe_visitas: data.informe_visitas,
       tareas_pendientes_reporte_visitas: data.tareas_pendientes_reporte_visitas,
-      tipo_transporte: data.tipo_transporte,
-      tipo_pago_combustible: data.tipo_pago_combustible,
-      // GPS nuevo (punto B)
+      tipo_transporte: transporte,
+      tipo_pago_combustible: pago,
       latitud_reporte_visitas: gps.latitud,
       longitud_reporte_visitas: gps.longitud,
       gps_accuracy_visita: gps.accuracy,
@@ -1445,9 +1468,27 @@ function renderAdminUsuarios() {
 
   function paintUserOptions(user = null) {
     const cats = getState().catalogos;
-    userOptions.innerHTML = CATALOG_META.map((meta) =>
-      userOptionChecks(meta.key, cats[meta.key] || [], user?.[meta.key] || [])
-    ).join('');
+    const optionCats = CATALOG_META.filter(
+      (m) => m.key === 'tipos_salida' || m.key === 'tipos_visita'
+    );
+    userOptions.innerHTML = `
+      ${optionCats
+        .map((meta) => userOptionChecks(meta.key, cats[meta.key] || [], user?.[meta.key] || []))
+        .join('')}
+      <div class="sm:col-span-2 grid gap-3 sm:grid-cols-2">
+        ${field('Transporte asignado', 'transporte_default', {
+          type: 'select',
+          required: false,
+          value: catalogOptionsHtml(cats.tipos_transporte || [], user?.transporte_default || ''),
+        })}
+        ${field('Pago combustible asignado', 'pago_combustible_default', {
+          type: 'select',
+          required: false,
+          value: catalogOptionsHtml(cats.tipos_pago || [], user?.pago_combustible_default || ''),
+        })}
+      </div>
+      <p class="sm:col-span-2 text-[11px] text-slate-400">Transporte y pago quedan fijos en el reporte de visita del vendedor.</p>
+    `;
 
     userOptions.querySelectorAll('[data-inherit]').forEach((cb) => {
       cb.addEventListener('change', () => {
@@ -1511,11 +1552,13 @@ function renderAdminUsuarios() {
     const password = String(fd.get('password') || '').trim() || existing?.password || 'cambiar123';
 
     const picks = {};
-    for (const meta of CATALOG_META) {
-      const inherit = formUser.querySelector(`[data-inherit="${meta.key}"]`)?.checked;
-      if (inherit) picks[meta.key] = [];
-      else picks[meta.key] = fd.getAll(meta.key).map(String);
+    for (const key of ['tipos_salida', 'tipos_visita']) {
+      const inherit = formUser.querySelector(`[data-inherit="${key}"]`)?.checked;
+      if (inherit) picks[key] = [];
+      else picks[key] = fd.getAll(key).map(String);
     }
+    picks.tipos_transporte = [];
+    picks.tipos_pago = [];
 
     upsertUser({
       id: fd.get('id'),
@@ -1529,6 +1572,8 @@ function renderAdminUsuarios() {
       rol: fd.get('rol'),
       combustible_activo: fd.get('combustible_activo') === 'on',
       activo: true,
+      transporte_default: String(fd.get('transporte_default') || '').trim(),
+      pago_combustible_default: String(fd.get('pago_combustible_default') || '').trim(),
       ...picks,
     });
     showToast('Usuario guardado.');

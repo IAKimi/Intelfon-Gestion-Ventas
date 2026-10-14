@@ -56,6 +56,8 @@ const SEED_USERS = [
     tipos_visita: [],
     tipos_transporte: [],
     tipos_pago: [],
+    transporte_default: '',
+    pago_combustible_default: '',
   },
   {
     id: 'vend-1',
@@ -73,6 +75,8 @@ const SEED_USERS = [
     tipos_visita: [],
     tipos_transporte: [],
     tipos_pago: [],
+    transporte_default: 'Moto',
+    pago_combustible_default: 'Pago por conteo',
   },
 ];
 
@@ -107,6 +111,8 @@ function publicUser(row) {
     tipos_visita: row.tipos_visita || [],
     tipos_transporte: row.tipos_transporte || [],
     tipos_pago: row.tipos_pago || [],
+    transporte_default: row.transporte_default || '',
+    pago_combustible_default: row.pago_combustible_default || '',
   };
 }
 
@@ -162,6 +168,21 @@ async function migrate() {
     ADD COLUMN IF NOT EXISTS salidas JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
 
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS transporte_default TEXT NOT NULL DEFAULT ''
+  `);
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS pago_combustible_default TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    UPDATE users
+    SET transporte_default = 'Moto',
+        pago_combustible_default = 'Pago por conteo'
+    WHERE id = 'vend-1'
+      AND (transporte_default = '' OR pago_combustible_default = '')
+  `);
+
   const stateCount = await pool.query('SELECT COUNT(*)::int AS c FROM app_state');
   if (stateCount.rows[0].c === 0) {
     await pool.query(
@@ -178,8 +199,9 @@ async function migrate() {
       await pool.query(
         `INSERT INTO users (
           id, usuario, password_hash, nombre, cargo, sucursal, correo, correo_jefe, rol,
-          combustible_activo, activo, tipos_salida, tipos_visita, tipos_transporte, tipos_pago
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)`,
+          combustible_activo, activo, tipos_salida, tipos_visita, tipos_transporte, tipos_pago,
+          transporte_default, pago_combustible_default
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17)`,
         [
           u.id,
           u.usuario,
@@ -196,6 +218,8 @@ async function migrate() {
           JSON.stringify(u.tipos_visita),
           JSON.stringify(u.tipos_transporte),
           JSON.stringify(u.tipos_pago),
+          u.transporte_default || '',
+          u.pago_combustible_default || '',
         ]
       );
     }
@@ -403,8 +427,9 @@ app.put('/api/state', requireAuth, async (req, res) => {
           await pool.query(
             `INSERT INTO users (
               id, usuario, password_hash, nombre, cargo, sucursal, correo, correo_jefe, rol,
-              combustible_activo, activo, tipos_salida, tipos_visita, tipos_transporte, tipos_pago
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb)`,
+              combustible_activo, activo, tipos_salida, tipos_visita, tipos_transporte, tipos_pago,
+              transporte_default, pago_combustible_default
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17)`,
             [
               u.id,
               u.usuario,
@@ -421,10 +446,12 @@ app.put('/api/state', requireAuth, async (req, res) => {
               JSON.stringify(u.tipos_visita || []),
               JSON.stringify(u.tipos_transporte || []),
               JSON.stringify(u.tipos_pago || []),
+              String(u.transporte_default || '').trim(),
+              String(u.pago_combustible_default || '').trim(),
             ]
           );
         } else {
-          const params = [
+          const baseParams = [
             u.usuario,
             u.nombre || '',
             u.cargo || '',
@@ -438,7 +465,8 @@ app.put('/api/state', requireAuth, async (req, res) => {
             JSON.stringify(u.tipos_visita || []),
             JSON.stringify(u.tipos_transporte || []),
             JSON.stringify(u.tipos_pago || []),
-            u.id,
+            String(u.transporte_default || '').trim(),
+            String(u.pago_combustible_default || '').trim(),
           ];
           if (password) {
             const hash = await bcrypt.hash(password, 10);
@@ -447,9 +475,10 @@ app.put('/api/state', requireAuth, async (req, res) => {
                 usuario=$1, nombre=$2, cargo=$3, sucursal=$4, correo=$5, correo_jefe=$6, rol=$7,
                 combustible_activo=$8, activo=$9,
                 tipos_salida=$10::jsonb, tipos_visita=$11::jsonb, tipos_transporte=$12::jsonb, tipos_pago=$13::jsonb,
-                password_hash=$14, updated_at=NOW()
-               WHERE id=$15`,
-              [...params.slice(0, 13), hash, u.id]
+                transporte_default=$14, pago_combustible_default=$15,
+                password_hash=$16, updated_at=NOW()
+               WHERE id=$17`,
+              [...baseParams, hash, u.id]
             );
           } else {
             await pool.query(
@@ -457,9 +486,10 @@ app.put('/api/state', requireAuth, async (req, res) => {
                 usuario=$1, nombre=$2, cargo=$3, sucursal=$4, correo=$5, correo_jefe=$6, rol=$7,
                 combustible_activo=$8, activo=$9,
                 tipos_salida=$10::jsonb, tipos_visita=$11::jsonb, tipos_transporte=$12::jsonb, tipos_pago=$13::jsonb,
+                transporte_default=$14, pago_combustible_default=$15,
                 updated_at=NOW()
-               WHERE id=$14`,
-              params
+               WHERE id=$16`,
+              [...baseParams, u.id]
             );
           }
         }
