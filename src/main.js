@@ -9,8 +9,10 @@ import {
   createId,
   resolveCombustible,
   setUserCombustible,
-  saveLastSalida,
-  getLastSalida,
+  createPendingSalida,
+  getPendingSalidas,
+  getSalidaById,
+  markSalidaVisitada,
   resolveOptions,
   upsertCatalogItem,
   setCatalogItemActive,
@@ -430,6 +432,7 @@ function renderHome() {
   const notes = getUserNotifications(user.id);
   const unread = notes.filter((n) => !n.leida).length;
   const gpsOk = hasUsableLocation();
+  const pendingVisitas = getPendingSalidas(user.id).length;
 
   app.innerHTML = shell(
     `
@@ -489,7 +492,14 @@ function renderHome() {
 
     <div class="stagger grid grid-cols-2 gap-3 sm:gap-4 ${gpsOk ? '' : 'opacity-60'}">
       ${actionCard('/salida', 'Registro de salida', 'Punto de partida y destino.', 'salida')}
-      ${actionCard('/visita', 'Reporte de visita', 'Resultado y evidencia GPS.', 'visita')}
+      ${actionCard(
+        '/visita',
+        'Reporte de visita',
+        pendingVisitas
+          ? `${pendingVisitas} pendiente${pendingVisitas > 1 ? 's' : ''} por reportar.`
+          : 'Elija una salida pendiente.',
+        'visita'
+      )}
       ${actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro')}
       ${
         isCatalogoClientesActivo()
@@ -639,20 +649,82 @@ function renderSalida() {
       longitud_registro_salidas: gps.longitud,
       gps_accuracy_salida: gps.accuracy,
     });
-    saveLastSalida(session.id, {
-      latitud: gps.latitud,
-      longitud: gps.longitud,
-      cliente: data.cliente_registro_salida,
-    });
+    createPendingSalida(
+      {
+        ...data,
+        latitud_registro_salidas: gps.latitud,
+        longitud_registro_salidas: gps.longitud,
+        gps_accuracy_salida: gps.accuracy,
+      },
+      session
+    );
     showToast(`${result.message} GPS: ${gps.latitud}, ${gps.longitud}`);
     go('/');
   });
 }
 
-function renderVisita() {
+function readonlyInfo(label, value) {
+  return `
+    <div class="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+      <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">${label}</div>
+      <div class="mt-0.5 text-sm font-semibold text-slate-900 break-words">${escapeHtml(value || '—')}</div>
+    </div>`;
+}
+
+function renderVisitaBacklog() {
+  const user = getState().session;
+  const pending = getPendingSalidas(user.id);
+
+  app.innerHTML = shell(
+    `
+    <div class="mb-4">
+      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Visitas pendientes</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900">Backlog de salidas</h2>
+      <p class="mt-1 text-sm text-slate-500">Seleccione una salida registrada para completar el reporte de visita.</p>
+    </div>
+    ${locationBannerHtml()}
+    ${
+      pending.length
+        ? `<div class="stagger space-y-3">
+            ${pending
+              .map(
+                (s) => `
+              <button data-nav="/visita/${s.id}" class="card-lift w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm font-black text-slate-900 truncate">${escapeHtml(s.cliente_registro_salida || 'Sin cliente')}</div>
+                    <div class="mt-1 text-xs text-slate-500">${escapeHtml(s.fecha_registro_salida || '')} · ${escapeHtml(s.hora_registro_salida || '')}</div>
+                    <div class="mt-1 text-xs text-slate-600">${escapeHtml(s.tipo_registro_salida || 'Sin tipo')} · ${escapeHtml(s.contacto_registro_salida || 'Sin contacto')}</div>
+                    ${s.punto_referencia ? `<div class="mt-1 text-[11px] text-slate-400 truncate">${escapeHtml(s.punto_referencia)}</div>` : ''}
+                  </div>
+                  <span class="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-800">Pendiente</span>
+                </div>
+              </button>`
+              )
+              .join('')}
+          </div>`
+        : `<div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-900">
+            No tiene salidas pendientes. Primero registre una <strong>salida</strong>; luego podrá reportar la visita desde aquí.
+            <button data-nav="/salida" class="mt-3 inline-flex rounded-xl bg-red-600 px-4 py-2 text-xs font-black uppercase text-white">Ir a registro de salida</button>
+          </div>`
+    }
+    `,
+    { title: 'Reporte de visita', showBack: true, backTo: '/' }
+  );
+  bindShell('/');
+  bindGpsBanner();
+}
+
+function renderVisitaForm(salidaId) {
   const { fecha, hora } = nowParts();
   const user = getState().session;
-  const last = getLastSalida(user.id);
+  const salida = getSalidaById(salidaId);
+  if (!salida || salida.vendedorId !== user.id || salida.estado !== 'pendiente') {
+    showToast('Esa salida no está disponible o ya fue reportada.', 'err');
+    go('/visita', { replace: true });
+    return;
+  }
+
   const tiposVisita = resolveOptions(user, 'tipos_visita');
   const transportes = resolveOptions(user, 'tipos_transporte');
   const pagos = resolveOptions(user, 'tipos_pago');
@@ -662,64 +734,60 @@ function renderVisita() {
     <form id="form-visita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Al enviar se captura el <strong>GPS actual</strong> (punto B). El punto A viene de su última salida.
+        Datos de la <strong>salida</strong> (solo lectura). Al enviar se captura el <strong>GPS actual</strong> como punto B.
       </div>
-      ${
-        last
-          ? `<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
-              Punto A listo: <strong>${escapeHtml(last.latitud)}, ${escapeHtml(last.longitud)}</strong>
-            </div>`
-          : `<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-              Registre primero una <strong>salida</strong> para calcular la distancia A→B.
-            </div>`
-      }
-      <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Fecha', 'fecha_reporte_visitas', { type: 'date', value: fecha })}
-        ${field('Hora', 'hora_reporte_visitas', { type: 'time', value: hora })}
+      <div class="grid gap-2 sm:grid-cols-2">
+        ${readonlyInfo('Fecha salida', salida.fecha_registro_salida)}
+        ${readonlyInfo('Hora salida', salida.hora_registro_salida)}
+        ${readonlyInfo('Cliente', salida.cliente_registro_salida)}
+        ${readonlyInfo('Contacto', salida.contacto_registro_salida)}
+        ${readonlyInfo('Tipo de salida', salida.tipo_registro_salida)}
+        ${readonlyInfo('Punto de referencia', salida.punto_referencia)}
+        <div class="sm:col-span-2">${readonlyInfo('Objetivo (salida)', salida.objetivo_registro_salida)}</div>
+        <div class="sm:col-span-2">${readonlyInfo('GPS salida (punto A)', `${salida.latitud_registro_salidas}, ${salida.longitud_registro_salidas}`)}</div>
       </div>
-      ${clientFieldsHtml({
-        nameField: 'cliente_reporte_visitas',
-        contactField: 'contacto_reporte_visitas',
-        selected: last?.cliente || '',
-        contactLabel: 'Contacto atendido',
-      })}
-      ${field('Tipo de visita', 'tipo_visita', {
-        type: 'select',
-        required: tiposVisita.length > 0,
-        value: optionsHtml(tiposVisita),
-      })}
-      ${field('Punto de referencia', 'punto_referencia_visitas', { required: false })}
-      ${field('Objetivo', 'objetivo_visita', { type: 'textarea', required: false })}
-      ${field('Informe / resultado', 'informe_visitas', { type: 'textarea', placeholder: '¿Qué ocurrió en la visita?' })}
-      ${field('Tareas pendientes', 'tareas_pendientes_reporte_visitas', { type: 'textarea', required: false })}
-      <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Tipo de transporte', 'tipo_transporte', {
+
+      <div class="border-t border-slate-100 pt-4">
+        <h3 class="mb-3 text-xs font-black uppercase tracking-wider text-red-700">Completar visita</h3>
+        <div class="grid gap-4 sm:grid-cols-2">
+          ${field('Fecha del reporte', 'fecha_reporte_visitas', { type: 'date', value: fecha })}
+          ${field('Hora del reporte', 'hora_reporte_visitas', { type: 'time', value: hora })}
+        </div>
+        ${field('Tipo de visita', 'tipo_visita', {
           type: 'select',
-          required: transportes.length > 0,
-          value: optionsHtml(transportes),
+          required: tiposVisita.length > 0,
+          value: optionsHtml(tiposVisita),
         })}
-        ${field('Tipo de pago combustible', 'tipo_pago_combustible', {
-          type: 'select',
-          required: pagos.length > 0,
-          value: optionsHtml(pagos),
-        })}
+        ${field('Informe / resultado', 'informe_visitas', { type: 'textarea', placeholder: '¿Qué ocurrió en la visita?' })}
+        ${field('Tareas pendientes', 'tareas_pendientes_reporte_visitas', { type: 'textarea', required: false })}
+        <div class="grid gap-4 sm:grid-cols-2">
+          ${field('Tipo de transporte', 'tipo_transporte', {
+            type: 'select',
+            required: transportes.length > 0,
+            value: optionsHtml(transportes),
+          })}
+          ${field('Tipo de pago combustible', 'tipo_pago_combustible', {
+            type: 'select',
+            required: pagos.length > 0,
+            value: optionsHtml(pagos),
+          })}
+        </div>
+        <div class="mt-4">
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica</label>
+          <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm" />
+        </div>
       </div>
-      <div>
-        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica</label>
-        <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm" />
-      </div>
-      <button id="submit-btn" ${!last ? 'disabled' : ''} class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">Reportar visita</button>
+      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Reportar visita</button>
     </form>
     `,
-    { title: 'Reporte de visita', showBack: true, backTo: '/' }
+    { title: 'Completar visita', showBack: true, backTo: '/visita' }
   );
   bindShell('/');
   bindGpsBanner();
-  bindClientSelect(document.getElementById('form-visita'));
   bindFormSubmit('form-visita', async (data, btn, form) => {
-    const current = getLastSalida(getState().session.id);
-    if (!current?.latitud || !current?.longitud) {
-      throw new Error('Registre primero una salida para obtener el punto A.');
+    const current = getSalidaById(salidaId);
+    if (!current || current.estado !== 'pendiente') {
+      throw new Error('La salida ya no está pendiente.');
     }
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
@@ -729,17 +797,49 @@ function renderVisita() {
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'reportes_visitas',
-      ...data,
-      latitud_registro_salidas: current.latitud,
-      longitud_registro_salidas: current.longitud,
+      // Reciclados de la salida
+      fecha_registro_salida: current.fecha_registro_salida,
+      hora_registro_salida: current.hora_registro_salida,
+      cliente_registro_salida: current.cliente_registro_salida,
+      contacto_registro_salida: current.contacto_registro_salida,
+      tipo_registro_salida: current.tipo_registro_salida,
+      punto_referencia: current.punto_referencia,
+      objetivo_registro_salida: current.objetivo_registro_salida,
+      latitud_registro_salidas: current.latitud_registro_salidas,
+      longitud_registro_salidas: current.longitud_registro_salidas,
+      gps_accuracy_salida: current.gps_accuracy_salida,
+      // Campos del reporte (visita)
+      fecha_reporte_visitas: data.fecha_reporte_visitas,
+      hora_reporte_visitas: data.hora_reporte_visitas,
+      cliente_reporte_visitas: current.cliente_registro_salida,
+      contacto_reporte_visitas: current.contacto_registro_salida,
+      tipo_visita: data.tipo_visita,
+      punto_referencia_visitas: current.punto_referencia,
+      objetivo_visita: current.objetivo_registro_salida,
+      informe_visitas: data.informe_visitas,
+      tareas_pendientes_reporte_visitas: data.tareas_pendientes_reporte_visitas,
+      tipo_transporte: data.tipo_transporte,
+      tipo_pago_combustible: data.tipo_pago_combustible,
+      // GPS nuevo (punto B)
       latitud_reporte_visitas: gps.latitud,
       longitud_reporte_visitas: gps.longitud,
       gps_accuracy_visita: gps.accuracy,
       galeria_fotos_reporte_visitas: foto || null,
     });
+    markSalidaVisitada(salidaId);
     showToast(`${result.message} GPS visita: ${gps.latitud}, ${gps.longitud}`);
-    go('/');
+    go('/visita');
   });
+}
+
+function renderVisita() {
+  const path = pathOf();
+  const match = path.match(/^\/visita\/([^/]+)$/);
+  if (match) {
+    renderVisitaForm(decodeURIComponent(match[1]));
+    return;
+  }
+  renderVisitaBacklog();
 }
 
 function renderReintegro() {
@@ -1503,12 +1603,14 @@ function render() {
     return;
   }
 
+  if (path === '/visita' || path.startsWith('/visita/')) {
+    renderVisita();
+    return;
+  }
+
   switch (path) {
     case '/salida':
       renderSalida();
-      break;
-    case '/visita':
-      renderVisita();
       break;
     case '/reintegro':
       renderReintegro();

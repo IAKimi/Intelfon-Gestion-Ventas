@@ -142,6 +142,7 @@ async function migrate() {
       clients JSONB NOT NULL DEFAULT '[]'::jsonb,
       client_requests JSONB NOT NULL DEFAULT '[]'::jsonb,
       notifications JSONB NOT NULL DEFAULT '[]'::jsonb,
+      salidas JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -154,6 +155,11 @@ async function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_users_correo ON users(correo);
+  `);
+
+  await pool.query(`
+    ALTER TABLE app_state
+    ADD COLUMN IF NOT EXISTS salidas JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
 
   const stateCount = await pool.query('SELECT COUNT(*)::int AS c FROM app_state');
@@ -215,6 +221,7 @@ async function getAppPayload(sessionUser = null) {
     clients: s.clients || [],
     clientRequests: s.client_requests || [],
     notifications: s.notifications || [],
+    salidas: s.salidas || [],
     users,
     session: sessionUser ? publicUser(sessionUser) : null,
   };
@@ -357,6 +364,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
       notifications: Array.isArray(body.notifications)
         ? body.notifications
         : current.notifications,
+      salidas: Array.isArray(body.salidas) ? body.salidas : current.salidas,
     };
 
     await pool.query(
@@ -369,6 +377,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         clients = $6::jsonb,
         client_requests = $7::jsonb,
         notifications = $8::jsonb,
+        salidas = $9::jsonb,
         updated_at = NOW()
        WHERE id = 1`,
       [
@@ -380,6 +389,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         JSON.stringify(next.clients),
         JSON.stringify(next.clientRequests),
         JSON.stringify(next.notifications),
+        JSON.stringify(next.salidas),
       ]
     );
 

@@ -44,6 +44,7 @@ const DEFAULT_STATE = {
   clients: [],
   clientRequests: [],
   notifications: [],
+  salidas: [],
   users: [
     {
       id: 'admin-1',
@@ -127,6 +128,7 @@ function applyRemotePayload(payload, sessionOverride) {
     clients: Array.isArray(payload.clients) ? payload.clients : [],
     clientRequests: Array.isArray(payload.clientRequests) ? payload.clientRequests : [],
     notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
+    salidas: Array.isArray(payload.salidas) ? payload.salidas : [],
     users: (payload.users || []).map(normalizeUser),
     session: sessionOverride || payload.session || null,
   };
@@ -157,6 +159,7 @@ function loadLocal() {
       clients: Array.isArray(parsed.clients) ? parsed.clients : [],
       clientRequests: Array.isArray(parsed.clientRequests) ? parsed.clientRequests : [],
       notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+      salidas: Array.isArray(parsed.salidas) ? parsed.salidas : [],
       correo_ventas: parsed.correo_ventas || DEFAULT_STATE.correo_ventas,
       catalogoClientesActivo: Boolean(parsed.catalogoClientesActivo),
       webhookUrl: String(parsed.webhookUrl || '').trim() || DEFAULT_WEBHOOK_URL,
@@ -193,6 +196,7 @@ function queueRemoteSync() {
         clients: state.clients,
         clientRequests: state.clientRequests,
         notifications: state.notifications,
+        salidas: state.salidas,
         users: state.users,
       });
       applyRemotePayload(payload, state.session);
@@ -569,6 +573,63 @@ export function getLastSalida(userId) {
   } catch {
     return null;
   }
+}
+
+/** Crea una salida pendiente tras enviar el registro a Make. */
+export function createPendingSalida(data, seller) {
+  const state = ensureMemory();
+  if (!Array.isArray(state.salidas)) state.salidas = [];
+  const salida = {
+    id: createId('sal'),
+    vendedorId: seller.id,
+    vendedorNombre: seller.nombre || '',
+    estado: 'pendiente',
+    createdAt: new Date().toISOString(),
+    visitedAt: null,
+    fecha_registro_salida: data.fecha_registro_salida || '',
+    hora_registro_salida: data.hora_registro_salida || '',
+    cliente_registro_salida: data.cliente_registro_salida || '',
+    contacto_registro_salida: data.contacto_registro_salida || '',
+    tipo_registro_salida: data.tipo_registro_salida || '',
+    punto_referencia: data.punto_referencia || '',
+    objetivo_registro_salida: data.objetivo_registro_salida || '',
+    latitud_registro_salidas: String(data.latitud_registro_salidas || ''),
+    longitud_registro_salidas: String(data.longitud_registro_salidas || ''),
+    gps_accuracy_salida: data.gps_accuracy_salida ?? null,
+  };
+  state.salidas.unshift(salida);
+  save(state);
+  saveLastSalida(seller.id, {
+    latitud: salida.latitud_registro_salidas,
+    longitud: salida.longitud_registro_salidas,
+    cliente: salida.cliente_registro_salida,
+    salidaId: salida.id,
+  });
+  return { state: getState(), salida };
+}
+
+export function getPendingSalidas(userId) {
+  return (getState().salidas || []).filter(
+    (s) => s.vendedorId === userId && s.estado === 'pendiente'
+  );
+}
+
+export function getSalidaById(id) {
+  return (getState().salidas || []).find((s) => s.id === id) || null;
+}
+
+export function markSalidaVisitada(id) {
+  const state = ensureMemory();
+  if (!Array.isArray(state.salidas)) state.salidas = [];
+  const idx = state.salidas.findIndex((s) => s.id === id);
+  if (idx < 0) return getState();
+  state.salidas[idx] = {
+    ...state.salidas[idx],
+    estado: 'visitada',
+    visitedAt: new Date().toISOString(),
+  };
+  save(state);
+  return getState();
 }
 
 export const CATALOG_META = [
