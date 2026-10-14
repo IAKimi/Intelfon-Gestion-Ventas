@@ -1,4 +1,4 @@
-nombre,contacto
-Distribuidora Centro,Juan Pérez - 7777-1111
-Comercial Los Héroes,Ana López - ana@ejemplo.com
-Ferretería El Sol,Carlos Rivera - 2222-3333
+nombre,contacto,telefono
+Distribuidora Centro,Juan Pérez,7777-1111
+Comercial Los Héroes,Ana López,2222-3333
+Ferretería El Sol,Carlos Rivera,7000-5555

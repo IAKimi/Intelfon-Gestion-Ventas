@@ -104,29 +104,64 @@ function showToast(message, type = 'ok', { actionLabel = '', onAction = null, du
   toastTimer = setTimeout(() => el.classList.add('hidden'), actionLabel ? Math.max(duration, 8000) : duration);
 }
 
-async function requestLocationFromUi({ silentOk = false } = {}) {
-  const result = await ensureLocationAccess();
-  if (result.ok) {
-    if (!silentOk) showToast('Ubicación activada. Ya puede registrar operaciones.');
-    return true;
+function showGpsBusy(message = 'Obteniendo ubicación…') {
+  hideGpsBusy();
+  const el = document.createElement('div');
+  el.id = 'gps-busy-overlay';
+  el.className = 'gps-busy-overlay';
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-busy', 'true');
+  el.setAttribute('aria-live', 'assertive');
+  el.innerHTML = `
+    <div class="gps-busy-card">
+      <div class="gps-busy-spinner" aria-hidden="true"></div>
+      <div class="text-sm font-black text-slate-900">${escapeHtml(message)}</div>
+      <p class="mt-2 text-xs leading-relaxed text-slate-500">Espere un momento. No toque la pantalla hasta que termine.</p>
+    </div>`;
+  el.addEventListener(
+    'touchmove',
+    (e) => {
+      e.preventDefault();
+    },
+    { passive: false }
+  );
+  document.body.appendChild(el);
+  document.body.style.overflow = 'hidden';
+}
+
+function hideGpsBusy() {
+  document.getElementById('gps-busy-overlay')?.remove();
+  document.body.style.overflow = '';
+}
+
+async function requestLocationFromUi({ silentOk = false, busyMessage } = {}) {
+  showGpsBusy(busyMessage || 'Activando ubicación…');
+  try {
+    const result = await ensureLocationAccess();
+    if (result.ok) {
+      if (!silentOk) showToast('Ubicación activada. Ya puede registrar operaciones.');
+      return true;
+    }
+    const err = result.error;
+    showToast(err?.message || 'No se pudo activar la ubicación.', 'err', {
+      actionLabel: err?.code === 'denied' || err?.code === 'insecure' ? '' : 'Reintentar',
+      onAction: err?.code === 'denied' || err?.code === 'insecure' ? null : () => requestLocationFromUi(),
+      duration: 9000,
+    });
+    if (err?.code === 'denied') {
+      window.alert(
+        'Sin permiso de ubicación no se pueden registrar salidas ni visitas.\n\nEn el navegador: toque el candado o la información del sitio → Permisos → Ubicación → Permitir, y luego pulse «Activar ubicación».'
+      );
+    }
+    return false;
+  } finally {
+    hideGpsBusy();
   }
-  const err = result.error;
-  showToast(err?.message || 'No se pudo activar la ubicación.', 'err', {
-    actionLabel: err?.code === 'denied' || err?.code === 'insecure' ? '' : 'Reintentar',
-    onAction: err?.code === 'denied' || err?.code === 'insecure' ? null : () => requestLocationFromUi(),
-    duration: 9000,
-  });
-  if (err?.code === 'denied') {
-    window.alert(
-      'Sin permiso de ubicación no se pueden registrar salidas ni visitas.\n\nEn el navegador: toque el candado o la información del sitio → Permisos → Ubicación → Permitir, y luego pulse «Activar ubicación».'
-    );
-  }
-  return false;
 }
 
 function bindGpsBanner() {
   document.getElementById('btn-enable-gps')?.addEventListener('click', async () => {
-    const ok = await requestLocationFromUi();
+    const ok = await requestLocationFromUi({ busyMessage: 'Activando ubicación…' });
     if (ok) render();
   });
 }
@@ -134,31 +169,47 @@ function bindGpsBanner() {
 async function ensureSellerLocationGate() {
   if (locationPrompted && hasUsableLocation()) return true;
   locationPrompted = true;
-  const result = await ensureLocationAccess();
-  if (result.ok) return true;
-  const err = result.error;
-  window.alert(
-    `${err?.message || 'Se requiere ubicación.'}\n\nSin ubicación activa no podrá registrar salidas ni visitas.`
-  );
-  return false;
+  showGpsBusy('Activando ubicación…');
+  try {
+    const result = await ensureLocationAccess();
+    if (result.ok) return true;
+    const err = result.error;
+    window.alert(
+      `${err?.message || 'Se requiere ubicación.'}\n\nSin ubicación activa no podrá registrar salidas ni visitas.`
+    );
+    return false;
+  } finally {
+    hideGpsBusy();
+  }
 }
 
 async function requireGpsOrPrompt() {
   if (hasUsableLocation()) {
+    showGpsBusy('Capturando GPS…');
     try {
       return await getGps({ maximumAge: 30000, timeout: 12000 });
     } catch {
       /* cae a reintento interactivo */
+    } finally {
+      hideGpsBusy();
     }
   }
-  const ok = await requestLocationFromUi({ silentOk: true });
+  const ok = await requestLocationFromUi({
+    silentOk: true,
+    busyMessage: 'Activando ubicación…',
+  });
   if (!ok) {
     throw new LocationError(
       'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
       getLocationStatus() === 'denied' ? 'denied' : 'unavailable'
     );
   }
-  return getGps({ maximumAge: 5000, timeout: 15000 });
+  showGpsBusy('Capturando GPS…');
+  try {
+    return await getGps({ maximumAge: 5000, timeout: 15000 });
+  } finally {
+    hideGpsBusy();
+  }
 }
 
 function escapeHtml(str = '') {
@@ -374,14 +425,27 @@ function actionCard(path, title, desc, iconKey) {
 function clientFieldsHtml({
   nameField,
   contactField,
+  phoneField,
   selected = '',
   contactValue = '',
-  contactLabel = 'Contacto',
+  phoneValue = '',
+  contactLabel = 'Nombre de contacto',
+  phoneLabel = 'Teléfono',
 } = {}) {
+  const phoneBlock = phoneField
+    ? field(phoneLabel, phoneField, {
+        type: 'tel',
+        placeholder: 'Ej. 7777-8888',
+        required: false,
+        value: phoneValue,
+      })
+    : '';
+
   if (!isCatalogoClientesActivo()) {
     return `
       ${field('Cliente', nameField, { placeholder: 'Nombre de la empresa o cliente', value: selected })}
       ${field(contactLabel, contactField, { placeholder: 'Persona de contacto', required: false, value: contactValue })}
+      ${phoneBlock}
     `;
   }
 
@@ -389,7 +453,7 @@ function clientFieldsHtml({
   const opts = clients
     .map(
       (c) =>
-        `<option value="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" ${
+        `<option value="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" ${
           c.nombre === selected ? 'selected' : ''
         }>${escapeHtml(c.nombre)}</option>`
     )
@@ -397,7 +461,9 @@ function clientFieldsHtml({
   return `
     <div>
       <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
-      <select name="${nameField}" required data-client-select="${contactField}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+      <select name="${nameField}" required data-client-select="${contactField}" ${
+        phoneField ? `data-client-phone="${phoneField}"` : ''
+      } class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
         <option value="">Seleccione un cliente</option>
         ${opts || '<option value="" disabled>No hay clientes cargados</option>'}
       </select>
@@ -408,17 +474,23 @@ function clientFieldsHtml({
       }
     </div>
     ${field(contactLabel, contactField, { placeholder: 'Se completa al elegir cliente', required: false, value: contactValue })}
+    ${phoneBlock}
   `;
 }
 
 function bindClientSelect(form) {
   form.querySelectorAll('[data-client-select]').forEach((sel) => {
     const contactName = sel.dataset.clientSelect;
+    const phoneName = sel.dataset.clientPhone;
     if (!contactName) return;
     const sync = () => {
       const opt = sel.selectedOptions[0];
       const contactInput = form.querySelector(`[name="${contactName}"]`);
       if (contactInput && opt) contactInput.value = opt.dataset.contacto || '';
+      if (phoneName) {
+        const phoneInput = form.querySelector(`[name="${phoneName}"]`);
+        if (phoneInput && opt) phoneInput.value = opt.dataset.telefono || '';
+      }
     };
     sel.addEventListener('change', sync);
     sync();
@@ -634,6 +706,7 @@ function renderSalida() {
       ${clientFieldsHtml({
         nameField: 'cliente_registro_salida',
         contactField: 'contacto_registro_salida',
+        phoneField: 'telefono_registro_salida',
       })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
@@ -707,7 +780,7 @@ function renderVisitaBacklog() {
                   <div class="min-w-0">
                     <div class="text-sm font-black text-slate-900 truncate">${escapeHtml(s.cliente_registro_salida || 'Sin cliente')}</div>
                     <div class="mt-1 text-xs text-slate-500">${escapeHtml(s.fecha_registro_salida || '')} · ${escapeHtml(s.hora_registro_salida || '')}</div>
-                    <div class="mt-1 text-xs text-slate-600">${escapeHtml(s.tipo_registro_salida || 'Sin tipo')} · ${escapeHtml(s.contacto_registro_salida || 'Sin contacto')}</div>
+                    <div class="mt-1 text-xs text-slate-600">${escapeHtml(s.tipo_registro_salida || 'Sin tipo')} · ${escapeHtml(s.contacto_registro_salida || 'Sin contacto')}${s.telefono_registro_salida ? ` · ${escapeHtml(s.telefono_registro_salida)}` : ''}</div>
                     ${s.punto_referencia ? `<div class="mt-1 text-[11px] text-slate-400 truncate">${escapeHtml(s.punto_referencia)}</div>` : ''}
                   </div>
                   <span class="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-800">Pendiente</span>
@@ -747,21 +820,30 @@ function renderVisitaForm(salidaId) {
     `
     <form id="form-visita" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:space-y-6 sm:p-6">
       ${locationBannerHtml()}
-      <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm leading-relaxed text-slate-600">
-        Datos de la <strong>salida</strong> (solo lectura). Al enviar se captura el <strong>GPS actual</strong> como punto B.
-      </div>
-      <div class="grid gap-3 sm:grid-cols-2 sm:gap-4">
-        ${readonlyInfo('Fecha salida', salida.fecha_registro_salida)}
-        ${readonlyInfo('Hora salida', salida.hora_registro_salida)}
-        ${readonlyInfo('Cliente', salida.cliente_registro_salida)}
-        ${readonlyInfo('Contacto', salida.contacto_registro_salida)}
-        ${readonlyInfo('Tipo de salida', salida.tipo_registro_salida)}
-        ${readonlyInfo('Punto de referencia', salida.punto_referencia)}
-        <div class="sm:col-span-2">${readonlyInfo('Objetivo (salida)', salida.objetivo_registro_salida)}</div>
-        <div class="sm:col-span-2">${readonlyInfo('GPS salida (punto A)', `${salida.latitud_registro_salidas}, ${salida.longitud_registro_salidas}`)}</div>
-      </div>
+      <details class="group rounded-2xl border border-slate-200 bg-slate-50/80">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 [&::-webkit-details-marker]:hidden">
+          <div class="min-w-0">
+            <div class="text-sm font-black text-slate-900 truncate">${escapeHtml(salida.cliente_registro_salida || 'Salida')}</div>
+            <p class="mt-0.5 text-[11px] text-slate-500">Ver datos de la salida</p>
+          </div>
+          <span class="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-400 transition group-open:rotate-180">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+          </span>
+        </summary>
+        <div class="grid gap-3 border-t border-slate-200 px-4 py-4 sm:grid-cols-2 sm:gap-4">
+          ${readonlyInfo('Fecha salida', salida.fecha_registro_salida)}
+          ${readonlyInfo('Hora salida', salida.hora_registro_salida)}
+          ${readonlyInfo('Cliente', salida.cliente_registro_salida)}
+          ${readonlyInfo('Nombre de contacto', salida.contacto_registro_salida)}
+          ${readonlyInfo('Teléfono', salida.telefono_registro_salida)}
+          ${readonlyInfo('Tipo de salida', salida.tipo_registro_salida)}
+          ${readonlyInfo('Punto de referencia', salida.punto_referencia)}
+          <div class="sm:col-span-2">${readonlyInfo('Objetivo (salida)', salida.objetivo_registro_salida)}</div>
+          <div class="sm:col-span-2">${readonlyInfo('GPS salida (punto A)', `${salida.latitud_registro_salidas}, ${salida.longitud_registro_salidas}`)}</div>
+        </div>
+      </details>
 
-      <div class="space-y-4 border-t border-slate-100 pt-5 sm:space-y-5">
+      <div class="space-y-4 sm:space-y-5">
         <h3 class="text-xs font-black uppercase tracking-wider text-red-700">Completar visita</h3>
         <div class="grid gap-4 sm:grid-cols-2 sm:gap-5">
           ${field('Fecha del reporte', 'fecha_reporte_visitas', {
@@ -827,6 +909,7 @@ function renderVisitaForm(salidaId) {
       hora_registro_salida: current.hora_registro_salida,
       cliente_registro_salida: current.cliente_registro_salida,
       contacto_registro_salida: current.contacto_registro_salida,
+      telefono_registro_salida: current.telefono_registro_salida || '',
       tipo_registro_salida: current.tipo_registro_salida,
       punto_referencia: current.punto_referencia,
       objetivo_registro_salida: current.objetivo_registro_salida,
@@ -837,6 +920,7 @@ function renderVisitaForm(salidaId) {
       hora_reporte_visitas: data.hora_reporte_visitas,
       cliente_reporte_visitas: current.cliente_registro_salida,
       contacto_reporte_visitas: current.contacto_registro_salida,
+      telefono_reporte_visitas: current.telefono_registro_salida || '',
       tipo_visita: data.tipo_visita,
       punto_referencia_visitas: current.punto_referencia,
       objetivo_visita: current.objetivo_registro_salida,
@@ -908,7 +992,8 @@ function renderRegistrarCliente() {
         La solicitud se envía a <strong>Ventas</strong> para aprobación. Solo si es aprobada, el cliente entra a la lista usable en salidas y visitas.
       </div>
       ${field('Nombre (empresa o cliente)', 'nombre', { placeholder: 'Ej. Distribuidora ABC' })}
-      ${field('Contacto', 'contacto', { placeholder: 'Nombre, teléfono o correo', required: false })}
+      ${field('Nombre de contacto', 'contacto', { placeholder: 'Persona de contacto', required: false })}
+      ${field('Teléfono', 'telefono', { type: 'tel', placeholder: 'Ej. 7777-8888', required: false })}
       ${field('Notas / justificación', 'notas', { type: 'textarea', required: false, placeholder: 'Por qué solicita el alta' })}
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Solicitar registro</button>
     </form>
@@ -928,7 +1013,7 @@ function renderRegistrarCliente() {
                         : 'border-amber-200 bg-amber-50 text-amber-800';
                   return `<div class="rounded-xl border px-3 py-2 ${color}">
                     <div class="text-sm font-bold">${escapeHtml(r.nombre)}</div>
-                    <div class="text-[11px] opacity-80 capitalize">${escapeHtml(r.estado)} · ${escapeHtml(r.contacto || 'Sin contacto')}</div>
+                    <div class="text-[11px] opacity-80 capitalize">${escapeHtml(r.estado)} · ${escapeHtml(r.contacto || 'Sin contacto')}${r.telefono ? ` · ${escapeHtml(r.telefono)}` : ''}</div>
                   </div>`;
                 })
                 .join('')
@@ -950,6 +1035,7 @@ function renderRegistrarCliente() {
       request_id: request.id,
       nombre_cliente: request.nombre,
       contacto_cliente: request.contacto,
+      telefono_cliente: request.telefono || '',
       notas_solicitud: request.notas,
       correo_ventas: state.correo_ventas,
       accion: 'pendiente_aprobacion',
@@ -1139,7 +1225,7 @@ function renderAdminClientes() {
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Carga de clientes</h3>
       <p class="mt-1 text-xs text-slate-500">
-        Carga masiva por Excel/CSV (<strong>nombre</strong>, <strong>contacto</strong>).
+        Carga masiva por Excel/CSV (<strong>nombre</strong>, <strong>contacto</strong>, <strong>telefono</strong>).
         ${
           state.catalogoClientesActivo
             ? '<span class="font-semibold text-emerald-700"> Catálogo ON: obligatorio en formularios.</span>'
@@ -1157,6 +1243,7 @@ function renderAdminClientes() {
             <tr>
               <th class="px-3 py-2">Nombre</th>
               <th class="px-3 py-2">Contacto</th>
+              <th class="px-3 py-2">Teléfono</th>
               <th class="px-3 py-2"></th>
             </tr>
           </thead>
@@ -1169,13 +1256,14 @@ function renderAdminClientes() {
               <tr class="border-t border-slate-100">
                 <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(c.nombre)}</td>
                 <td class="px-3 py-2 text-slate-600">${escapeHtml(c.contacto || '—')}</td>
+                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.telefono || '—')}</td>
                 <td class="px-3 py-2 text-right">
                   <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
                 </td>
               </tr>`
                     )
                     .join('')
-                : '<tr><td colspan="3" class="px-3 py-4 text-slate-400">Sin clientes cargados.</td></tr>'
+                : '<tr><td colspan="4" class="px-3 py-4 text-slate-400">Sin clientes cargados.</td></tr>'
             }
           </tbody>
         </table>
@@ -1256,6 +1344,7 @@ function renderAdminSolicitudes() {
         request_id: request.id,
         nombre_cliente: request.nombre,
         contacto_cliente: request.contacto,
+        telefono_cliente: request.telefono || '',
         correo_vendedor: request.vendedorCorreo,
         correo_ventas: getState().correo_ventas,
         accion: 'aprobado',
@@ -1275,6 +1364,7 @@ function renderAdminSolicitudes() {
         request_id: request.id,
         nombre_cliente: request.nombre,
         contacto_cliente: request.contacto,
+        telefono_cliente: request.telefono || '',
         correo_vendedor: request.vendedorCorreo,
         correo_ventas: getState().correo_ventas,
         accion: 'rechazado',

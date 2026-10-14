@@ -433,6 +433,7 @@ export function importClients(rows) {
       id: createId('cli'),
       nombre,
       contacto,
+      telefono: String(row.telefono || '').trim(),
       origen: 'import',
       activo: true,
       createdAt: new Date().toISOString(),
@@ -450,12 +451,13 @@ export function deleteClient(id) {
   return getState();
 }
 
-export function createClientRequest({ nombre, contacto, notas }, seller) {
+export function createClientRequest({ nombre, contacto, telefono, notas }, seller) {
   const state = ensureMemory();
   const req = {
     id: createId('req'),
     nombre: String(nombre || '').trim(),
     contacto: String(contacto || '').trim(),
+    telefono: String(telefono || '').trim(),
     notas: String(notas || '').trim(),
     vendedorId: seller.id,
     vendedorNombre: seller.nombre,
@@ -487,6 +489,7 @@ export function resolveClientRequest(id, decision, adminNote = '') {
         id: createId('cli'),
         nombre: req.nombre,
         contacto: req.contacto,
+        telefono: req.telefono || '',
         origen: 'aprobado',
         activo: true,
         createdAt: new Date().toISOString(),
@@ -599,6 +602,7 @@ export function createPendingSalida(data, seller) {
     hora_registro_salida: data.hora_registro_salida || '',
     cliente_registro_salida: data.cliente_registro_salida || '',
     contacto_registro_salida: data.contacto_registro_salida || '',
+    telefono_registro_salida: data.telefono_registro_salida || '',
     tipo_registro_salida: data.tipo_registro_salida || '',
     punto_referencia: data.punto_referencia || '',
     objetivo_registro_salida: data.objetivo_registro_salida || '',

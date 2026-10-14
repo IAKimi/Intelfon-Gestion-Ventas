@@ -8,11 +8,16 @@ function normHeader(h) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
-function pickNombre(row) {
+function rowMap(row) {
   const map = {};
   for (const [k, v] of Object.entries(row)) {
     map[normHeader(k)] = v;
   }
+  return map;
+}
+
+function pickNombre(row) {
+  const map = rowMap(row);
   return (
     map.nombre ||
     map.empresa ||
@@ -25,15 +30,32 @@ function pickNombre(row) {
 }
 
 function pickContacto(row) {
-  const map = {};
-  for (const [k, v] of Object.entries(row)) {
-    map[normHeader(k)] = v;
-  }
-  return map.contacto || map.contact || map.telefono || map.email || map.correo || '';
+  const map = rowMap(row);
+  return (
+    map.contacto ||
+    map['nombre de contacto'] ||
+    map['nombre contacto'] ||
+    map.contact ||
+    map.persona ||
+    ''
+  );
+}
+
+function pickTelefono(row) {
+  const map = rowMap(row);
+  return (
+    map.telefono ||
+    map.tel ||
+    map.celular ||
+    map.movil ||
+    map.phone ||
+    map.whatsapp ||
+    ''
+  );
 }
 
 /**
- * Lee un File (.csv, .xlsx, .xls) y devuelve filas { nombre, contacto }.
+ * Lee un File (.csv, .xlsx, .xls) y devuelve filas { nombre, contacto, telefono }.
  */
 export async function parseClientFile(file) {
   const buf = await file.arrayBuffer();
@@ -45,8 +67,9 @@ export async function parseClientFile(file) {
   for (const row of rows) {
     const nombre = String(pickNombre(row) || '').trim();
     const contacto = String(pickContacto(row) || '').trim();
+    const telefono = String(pickTelefono(row) || '').trim();
     if (!nombre) continue;
-    clients.push({ nombre, contacto });
+    clients.push({ nombre, contacto, telefono });
   }
   return clients;
 }
