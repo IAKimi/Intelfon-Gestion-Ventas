@@ -69,25 +69,7 @@ function emptyEnvelope() {
   };
 }
 
-export async function getGps() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error('Este dispositivo no permite capturar ubicación GPS.'));
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        resolve({
-          latitud: String(pos.coords.latitude),
-          longitud: String(pos.coords.longitude),
-          accuracy: pos.coords.accuracy,
-        });
-      },
-      () => reject(new Error('No se pudo obtener la ubicación. Active el GPS e intente de nuevo.')),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
-  });
-}
+export { getGps } from './location.js';
 
 export function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {

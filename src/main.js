@@ -26,11 +26,19 @@ import {
   isCatalogoClientesActivo,
 } from './store.js';
 import { getGps, fileToDataUrl, sendToMake } from './webhook.js';
+import {
+  ensureLocationAccess,
+  getLocationStatus,
+  hasUsableLocation,
+  locationBannerHtml,
+  LocationError,
+} from './location.js';
 import { parseClientFile } from './clients-import.js';
 
 const app = document.getElementById('app');
 let toastTimer = null;
 let navToken = 0;
+let locationPrompted = false;
 
 function pathOf() {
   return window.location.pathname.replace(/\/+$/, '') || '/';
@@ -63,16 +71,92 @@ function nowParts() {
   };
 }
 
-function showToast(message, type = 'ok') {
+function showToast(message, type = 'ok', { actionLabel = '', onAction = null, duration = 3600 } = {}) {
   const el = document.getElementById('toast');
   if (!el) return;
-  el.className = `toast fixed bottom-5 left-1/2 z-50 max-w-sm -translate-x-1/2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-xl ${
+  el.className = `toast fixed bottom-5 left-1/2 z-50 w-[min(92vw,24rem)] -translate-x-1/2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-xl ${
     type === 'ok' ? 'bg-slate-900' : 'bg-red-600'
   }`;
-  el.textContent = message;
+  el.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'flex items-start gap-3';
+  const text = document.createElement('div');
+  text.className = 'min-w-0 flex-1 leading-snug';
+  text.textContent = message;
+  row.appendChild(text);
+  if (actionLabel && typeof onAction === 'function') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className =
+      'shrink-0 rounded-lg bg-white/20 px-3 py-1.5 text-[11px] font-black uppercase tracking-tight text-white hover:bg-white/30';
+    btn.textContent = actionLabel;
+    btn.addEventListener('click', async () => {
+      el.classList.add('hidden');
+      await onAction();
+    });
+    row.appendChild(btn);
+  }
+  el.appendChild(row);
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 3600);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), actionLabel ? Math.max(duration, 8000) : duration);
+}
+
+async function requestLocationFromUi({ silentOk = false } = {}) {
+  const result = await ensureLocationAccess();
+  if (result.ok) {
+    if (!silentOk) showToast('Ubicación activada. Ya puede registrar operaciones.');
+    return true;
+  }
+  const err = result.error;
+  showToast(err?.message || 'No se pudo activar la ubicación.', 'err', {
+    actionLabel: err?.code === 'denied' || err?.code === 'insecure' ? '' : 'Reintentar',
+    onAction: err?.code === 'denied' || err?.code === 'insecure' ? null : () => requestLocationFromUi(),
+    duration: 9000,
+  });
+  if (err?.code === 'denied') {
+    window.alert(
+      'Sin permiso de ubicación no se pueden registrar salidas ni visitas.\n\nEn el navegador: toque el candado o la información del sitio → Permisos → Ubicación → Permitir, y luego pulse «Activar ubicación».'
+    );
+  }
+  return false;
+}
+
+function bindGpsBanner() {
+  document.getElementById('btn-enable-gps')?.addEventListener('click', async () => {
+    const ok = await requestLocationFromUi();
+    if (ok) render();
+  });
+}
+
+async function ensureSellerLocationGate() {
+  if (locationPrompted && hasUsableLocation()) return true;
+  locationPrompted = true;
+  const result = await ensureLocationAccess();
+  if (result.ok) return true;
+  const err = result.error;
+  window.alert(
+    `${err?.message || 'Se requiere ubicación.'}\n\nSin ubicación activa no podrá registrar salidas ni visitas.`
+  );
+  return false;
+}
+
+async function requireGpsOrPrompt() {
+  if (hasUsableLocation()) {
+    try {
+      return await getGps({ maximumAge: 30000, timeout: 12000 });
+    } catch {
+      /* cae a reintento interactivo */
+    }
+  }
+  const ok = await requestLocationFromUi({ silentOk: true });
+  if (!ok) {
+    throw new LocationError(
+      'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
+      getLocationStatus() === 'denied' ? 'denied' : 'unavailable'
+    );
+  }
+  return getGps({ maximumAge: 5000, timeout: 15000 });
 }
 
 function escapeHtml(str = '') {
@@ -204,9 +288,15 @@ function renderSellerLogin() {
         showToast('Credenciales inválidas o sin acceso de vendedor.', 'err');
         return;
       }
+      locationPrompted = false;
+      if (btn) btn.textContent = 'Solicitando ubicación…';
+      await ensureSellerLocationGate();
       go('/', { replace: true });
     } finally {
-      if (btn) btn.disabled = false;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Ingresar';
+      }
     }
   });
 }
@@ -339,6 +429,7 @@ function renderHome() {
   const combustible = resolveCombustible(user);
   const notes = getUserNotifications(user.id);
   const unread = notes.filter((n) => !n.leida).length;
+  const gpsOk = hasUsableLocation();
 
   app.innerHTML = shell(
     `
@@ -353,6 +444,14 @@ function renderHome() {
           <span class="h-2 w-2 rounded-full ${combustible ? 'bg-emerald-500' : 'bg-slate-300'}"></span>
           Combustible ${combustible ? 'activo' : 'inactivo'}
         </div>
+        <div class="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+          gpsOk
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            : 'border-amber-200 bg-amber-50 text-amber-800'
+        }">
+          <span class="h-2 w-2 rounded-full ${gpsOk ? 'bg-emerald-500' : 'bg-amber-500'}"></span>
+          GPS ${gpsOk ? 'activo' : 'pendiente'}
+        </div>
         ${
           unread
             ? `<button id="btn-notes" class="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-bold text-red-700">${unread} notificación${unread > 1 ? 'es' : ''}</button>`
@@ -362,6 +461,8 @@ function renderHome() {
         }
       </div>
     </div>
+
+    ${locationBannerHtml()}
 
     <div id="notes-panel" class="mb-4 hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div class="mb-2 flex items-center justify-between">
@@ -386,7 +487,7 @@ function renderHome() {
       </div>
     </div>
 
-    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4">
+    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4 ${gpsOk ? '' : 'opacity-60'}">
       ${actionCard('/salida', 'Registro de salida', 'Punto de partida y destino.', 'salida')}
       ${actionCard('/visita', 'Reporte de visita', 'Resultado y evidencia GPS.', 'visita')}
       ${actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro')}
@@ -405,6 +506,7 @@ function renderHome() {
     { title: 'Inicio' }
   );
   bindShell('/');
+  bindGpsBanner();
 
   const panel = document.getElementById('notes-panel');
   document.getElementById('btn-notes')?.addEventListener('click', () => {
@@ -414,6 +516,24 @@ function renderHome() {
   document.getElementById('btn-notes-close')?.addEventListener('click', () => {
     panel.classList.add('hidden');
   });
+
+  if (!locationPrompted) {
+    locationPrompted = true;
+    void ensureLocationAccess().then((result) => {
+      if (!result.ok && result.error) {
+        showToast(result.error.message, 'err', {
+          actionLabel: 'Activar ubicación',
+          onAction: async () => {
+            const ok = await requestLocationFromUi();
+            if (ok) render();
+          },
+          duration: 10000,
+        });
+      } else if (result.ok) {
+        render();
+      }
+    });
+  }
 }
 
 function field(label, name, { type = 'text', required = true, value = '', placeholder = '', rows } = {}) {
@@ -454,7 +574,17 @@ function bindFormSubmit(formId, handler) {
       });
       await handler(data, btn, form);
     } catch (err) {
-      showToast(err.message || 'Ocurrió un error.', 'err');
+      const isLoc = err?.isLocationError || err instanceof LocationError;
+      showToast(err.message || 'Ocurrió un error.', 'err', {
+        actionLabel: isLoc ? 'Activar ubicación' : '',
+        onAction: isLoc
+          ? async () => {
+              const ok = await requestLocationFromUi();
+              if (ok) render();
+            }
+          : null,
+        duration: isLoc ? 10000 : 3600,
+      });
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -470,6 +600,7 @@ function renderSalida() {
   app.innerHTML = shell(
     `
     <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
         Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>GPS en tiempo real</strong> como punto A.
       </div>
@@ -494,11 +625,12 @@ function renderSalida() {
     { title: 'Registro de salida', showBack: true, backTo: '/' }
   );
   bindShell('/');
+  bindGpsBanner();
   bindClientSelect(document.getElementById('form-salida'));
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
     btn.textContent = 'Obteniendo GPS…';
-    const gps = await getGps();
+    const gps = await requireGpsOrPrompt();
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'registro_salidas',
@@ -528,6 +660,7 @@ function renderVisita() {
   app.innerHTML = shell(
     `
     <form id="form-visita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
         Al enviar se captura el <strong>GPS actual</strong> (punto B). El punto A viene de su última salida.
       </div>
@@ -581,6 +714,7 @@ function renderVisita() {
     { title: 'Reporte de visita', showBack: true, backTo: '/' }
   );
   bindShell('/');
+  bindGpsBanner();
   bindClientSelect(document.getElementById('form-visita'));
   bindFormSubmit('form-visita', async (data, btn, form) => {
     const current = getLastSalida(getState().session.id);
@@ -588,7 +722,7 @@ function renderVisita() {
       throw new Error('Registre primero una salida para obtener el punto A.');
     }
     btn.textContent = 'Obteniendo GPS…';
-    const gps = await getGps();
+    const gps = await requireGpsOrPrompt();
     const file = form.querySelector('input[name="foto"]').files[0];
     btn.textContent = 'Procesando imagen…';
     const foto = await fileToDataUrl(file);
