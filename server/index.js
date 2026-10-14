@@ -96,6 +96,7 @@ function createId(prefix) {
 }
 
 function publicUser(row) {
+  const pais = String(row.pais || '').trim().toUpperCase();
   return {
     id: row.id,
     usuario: row.usuario,
@@ -105,6 +106,7 @@ function publicUser(row) {
     correo: row.correo,
     correo_jefe: row.correo_jefe,
     rol: row.rol,
+    pais: pais === 'GT' || pais === 'SV' ? pais : '',
     combustible_activo: row.combustible_activo,
     activo: row.activo,
     tipos_salida: row.tipos_salida || [],
@@ -173,6 +175,9 @@ async function migrate() {
   `);
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS pago_combustible_default TEXT NOT NULL DEFAULT ''
+  `);
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS pais TEXT NOT NULL DEFAULT ''
   `);
 
   await pool.query(`
@@ -422,14 +427,16 @@ app.put('/api/state', requireAuth, async (req, res) => {
         if (!u?.id) continue;
         const existing = await pool.query('SELECT id FROM users WHERE id = $1', [u.id]);
         const password = String(u.password || '').trim();
+        const paisRaw = String(u.pais || '').trim().toUpperCase();
+        const pais = paisRaw === 'GT' || paisRaw === 'SV' ? paisRaw : '';
         if (existing.rowCount === 0) {
-          const hash = await bcrypt.hash(password || 'cambiar123', 10);
+          const hash = await bcrypt.hash(password || 'Cambiar123!', 10);
           await pool.query(
             `INSERT INTO users (
               id, usuario, password_hash, nombre, cargo, sucursal, correo, correo_jefe, rol,
               combustible_activo, activo, tipos_salida, tipos_visita, tipos_transporte, tipos_pago,
-              transporte_default, pago_combustible_default
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17)`,
+              transporte_default, pago_combustible_default, pais
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18)`,
             [
               u.id,
               u.usuario,
@@ -448,6 +455,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
               JSON.stringify(u.tipos_pago || []),
               String(u.transporte_default || '').trim(),
               String(u.pago_combustible_default || '').trim(),
+              pais,
             ]
           );
         } else {
@@ -467,6 +475,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
             JSON.stringify(u.tipos_pago || []),
             String(u.transporte_default || '').trim(),
             String(u.pago_combustible_default || '').trim(),
+            pais,
           ];
           if (password) {
             const hash = await bcrypt.hash(password, 10);
@@ -475,9 +484,9 @@ app.put('/api/state', requireAuth, async (req, res) => {
                 usuario=$1, nombre=$2, cargo=$3, sucursal=$4, correo=$5, correo_jefe=$6, rol=$7,
                 combustible_activo=$8, activo=$9,
                 tipos_salida=$10::jsonb, tipos_visita=$11::jsonb, tipos_transporte=$12::jsonb, tipos_pago=$13::jsonb,
-                transporte_default=$14, pago_combustible_default=$15,
-                password_hash=$16, updated_at=NOW()
-               WHERE id=$17`,
+                transporte_default=$14, pago_combustible_default=$15, pais=$16,
+                password_hash=$17, updated_at=NOW()
+               WHERE id=$18`,
               [...baseParams, hash, u.id]
             );
           } else {
@@ -486,9 +495,9 @@ app.put('/api/state', requireAuth, async (req, res) => {
                 usuario=$1, nombre=$2, cargo=$3, sucursal=$4, correo=$5, correo_jefe=$6, rol=$7,
                 combustible_activo=$8, activo=$9,
                 tipos_salida=$10::jsonb, tipos_visita=$11::jsonb, tipos_transporte=$12::jsonb, tipos_pago=$13::jsonb,
-                transporte_default=$14, pago_combustible_default=$15,
+                transporte_default=$14, pago_combustible_default=$15, pais=$16,
                 updated_at=NOW()
-               WHERE id=$16`,
+               WHERE id=$17`,
               [...baseParams, u.id]
             );
           }

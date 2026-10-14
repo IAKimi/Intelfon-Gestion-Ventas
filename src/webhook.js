@@ -16,6 +16,7 @@ function emptyEnvelope() {
     nombre_vendedor: '',
     cargo: '',
     sucursal: '',
+    pais: '',
     correo_vendedor: '',
     correo_jefe: '',
     combustible_activo: false,
@@ -87,10 +88,21 @@ export function fileToDataUrl(file) {
   });
 }
 
+/** Foto opcional: sin archivo / string vacío → null; con data URL → true en tiene_evidencia. */
+function normalizeGaleria(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return value;
+}
+
 function buildBody(payload) {
   const state = getState();
   const user = state.session;
   const base = emptyEnvelope();
+  const galeria = normalizeGaleria(payload.galeria_fotos_reporte_visitas);
 
   const body = {
     ...base,
@@ -100,6 +112,7 @@ function buildBody(payload) {
     nombre_vendedor: payload.nombre_vendedor || user?.nombre || '',
     cargo: payload.cargo || user?.cargo || '',
     sucursal: payload.sucursal || user?.sucursal || '',
+    pais: payload.pais || user?.pais || '',
     correo_vendedor: payload.correo_vendedor || user?.correo || '',
     correo_jefe: payload.correo_jefe || user?.correo_jefe || '',
     combustible_activo:
@@ -108,7 +121,8 @@ function buildBody(payload) {
         : resolveCombustible(user),
     catalogo_clientes_activo: Boolean(state.catalogoClientesActivo),
     correo_ventas: payload.correo_ventas || state.correo_ventas || '',
-    tiene_evidencia: Boolean(payload.galeria_fotos_reporte_visitas),
+    galeria_fotos_reporte_visitas: galeria,
+    tiene_evidencia: Boolean(galeria),
     timestamp: new Date().toISOString(),
     ambiente: window.location.hostname === 'localhost' ? 'desarrollo' : 'produccion',
   };

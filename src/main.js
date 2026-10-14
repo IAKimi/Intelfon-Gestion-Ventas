@@ -19,7 +19,10 @@ import {
   deleteCatalogItem,
   CATALOG_META,
   getActiveClients,
+  getClientsByVendedor,
+  getEjecutivos,
   importClients,
+  upsertClient,
   deleteClient,
   createClientRequest,
   resolveClientRequest,
@@ -875,8 +878,9 @@ function renderVisitaForm(salidaId) {
         </div>
         <p class="text-[11px] leading-relaxed text-slate-400">Transporte y pago los define el administrador en su perfil. Se envían así al reporte.</p>
         <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica</label>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica <span class="font-semibold normal-case tracking-normal text-slate-400">(opcional)</span></label>
           <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm" />
+          <p class="mt-1.5 text-[11px] leading-relaxed text-slate-400">Si no adjunta imagen, el reporte se envía sin evidencia.</p>
         </div>
       </div>
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-4 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Reportar visita</button>
@@ -899,9 +903,12 @@ function renderVisitaForm(salidaId) {
     }
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
-    const file = form.querySelector('input[name="foto"]').files[0];
-    btn.textContent = 'Procesando imagen…';
-    const foto = await fileToDataUrl(file);
+    const file = form.querySelector('input[name="foto"]').files?.[0] || null;
+    let foto = null;
+    if (file) {
+      btn.textContent = 'Procesando imagen…';
+      foto = await fileToDataUrl(file);
+    }
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'reportes_visitas',
@@ -931,7 +938,7 @@ function renderVisitaForm(salidaId) {
       latitud_reporte_visitas: gps.latitud,
       longitud_reporte_visitas: gps.longitud,
       gps_accuracy_visita: gps.accuracy,
-      galeria_fotos_reporte_visitas: foto || null,
+      galeria_fotos_reporte_visitas: foto,
     });
     markSalidaVisitada(salidaId);
     showToast(`${result.message} GPS visita: ${gps.latitud}, ${gps.longitud}`);
@@ -1148,10 +1155,10 @@ function renderAdminHub() {
     </div>
     <div class="stagger grid grid-cols-2 gap-3 sm:gap-4">
       ${actionCard('/admin/config', 'Configuración global', 'Combustible, catálogo y webhook.', 'config')}
-      ${actionCard('/admin/clientes', 'Carga de clientes', 'Importar y mantener el listado.', 'carga')}
+      ${actionCard('/admin/base-datos', 'Base de datos', 'Ejecutivos, carteras e importación.', 'carga')}
       ${actionCard('/admin/solicitudes', 'Solicitudes', pending ? `${pending} pendiente${pending > 1 ? 's' : ''}.` : 'Aprobar o rechazar altas.', 'solicitudes')}
       ${actionCard('/admin/catalogos', 'Catálogos globales', 'Opciones de formularios.', 'catalogos')}
-      ${actionCard('/admin/usuarios', 'Usuarios', 'Perfiles, roles y permisos.', 'usuarios')}
+      ${actionCard('/admin/usuarios', 'Usuarios', 'Correos, claves y permisos.', 'usuarios')}
     </div>
     `,
     { title: 'Administración' }
@@ -1217,33 +1224,140 @@ function renderAdminConfig() {
   });
 }
 
-function renderAdminClientes() {
+function renderAdminBaseDatos() {
   const state = getState();
-  const clients = state.clients.filter((c) => c.activo !== false);
+  const params = new URLSearchParams(location.search);
+  const view = params.get('view') || 'ejecutivos';
+  const filterVend = params.get('vendedor') || '';
+  const filterPais = params.get('pais') || '';
+  const ejecutivos = getEjecutivos();
+  let clients = state.clients.filter((c) => c.activo !== false);
+  if (filterVend) clients = clients.filter((c) => c.vendedorId === filterVend);
+  if (filterPais) clients = clients.filter((c) => c.pais === filterPais);
+
+  const tab = (id, label) => {
+    const active = view === id;
+    const href =
+      id === 'clientes' && filterVend
+        ? `/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(filterVend)}`
+        : `/admin/base-datos?view=${id}`;
+    return `<a href="${href}" data-nav class="rounded-full px-3 py-1.5 text-xs font-bold ${
+      active ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-600'
+    }">${label}</a>`;
+  };
+
+  const sellerOpts = ejecutivos
+    .map(
+      (u) =>
+        `<option value="${escapeHtml(u.id)}" ${u.id === filterVend ? 'selected' : ''}>${escapeHtml(
+          `${u.pais ? `[${u.pais}] ` : ''}${u.nombre}`
+        )}</option>`
+    )
+    .join('');
+
   app.innerHTML = shell(
     `
+    <div class="mb-4">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos</h3>
+      <p class="mt-1 text-xs text-slate-500">Ejecutivos, carteras e importación masiva (SV / GT).</p>
+      <div class="mt-3 flex flex-wrap gap-2">
+        ${tab('ejecutivos', 'Ejecutivos')}
+        ${tab('clientes', 'Clientes')}
+        ${tab('importar', 'Importar')}
+      </div>
+    </div>
+
+    ${
+      view === 'importar'
+        ? `
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Carga de clientes</h3>
-      <p class="mt-1 text-xs text-slate-500">
-        Carga masiva por Excel/CSV (<strong>nombre</strong>, <strong>contacto</strong>, <strong>telefono</strong>).
-        ${
-          state.catalogoClientesActivo
-            ? '<span class="font-semibold text-emerald-700"> Catálogo ON: obligatorio en formularios.</span>'
-            : '<span class="font-semibold text-slate-500"> Catálogo OFF: formularios en modo libre.</span>'
-        }
-      </p>
+      <h4 class="text-sm font-black text-slate-900">Importar Excel</h4>
+      <p class="mt-1 text-xs text-slate-500">Columnas A–H: País, Código, Cliente, Ejecutivo, GG Nombre/Tel/Celular/Correo. Crea perfiles stub y asigna cartera. Omite Intelfon Guatemala.</p>
       <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <input id="file-clients" type="file" accept=".csv,.xlsx,.xls" class="w-full flex-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm" />
         <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
       </div>
       <p id="import-status" class="mt-2 text-xs text-slate-500"></p>
-      <div class="mt-4 max-h-[28rem] overflow-y-auto rounded-xl border border-slate-100">
+      <p class="mt-3 text-[11px] text-slate-400">Clave temporal de stubs: <strong>Cambiar123!</strong> — luego asigne correos en Usuarios.</p>
+    </section>`
+        : ''
+    }
+
+    ${
+      view === 'ejecutivos'
+        ? `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div class="max-h-[32rem] overflow-y-auto">
         <table class="min-w-full text-left text-sm">
           <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
             <tr>
-              <th class="px-3 py-2">Nombre</th>
+              <th class="px-3 py-2">País</th>
+              <th class="px-3 py-2">Ejecutivo</th>
+              <th class="px-3 py-2">Usuario</th>
+              <th class="px-3 py-2">Clientes</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              ejecutivos.length
+                ? ejecutivos
+                    .map((u) => {
+                      const n = getClientsByVendedor(u.id).length;
+                      return `
+              <tr class="border-t border-slate-100">
+                <td class="px-3 py-2 font-bold text-slate-700">${escapeHtml(u.pais || '—')}</td>
+                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(u.nombre)}</td>
+                <td class="px-3 py-2 text-slate-500">${escapeHtml(u.usuario)}${u.correo ? '' : ' · sin correo'}</td>
+                <td class="px-3 py-2 text-slate-700">${n}</td>
+                <td class="px-3 py-2 text-right">
+                  <a href="/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(u.id)}" data-nav class="text-xs font-bold text-red-600 hover:underline">Cartera</a>
+                </td>
+              </tr>`;
+                    })
+                    .join('')
+                : '<tr><td colspan="5" class="px-3 py-4 text-slate-400">Sin ejecutivos. Importe el Excel.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>`
+        : ''
+    }
+
+    ${
+      view === 'clientes'
+        ? `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div class="flex-1">
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Ejecutivo</label>
+          <select id="filter-vendedor" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+            <option value="">Todos</option>
+            ${sellerOpts}
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">País</label>
+          <select id="filter-pais" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+            <option value="">Todos</option>
+            <option value="SV" ${filterPais === 'SV' ? 'selected' : ''}>SV</option>
+            <option value="GT" ${filterPais === 'GT' ? 'selected' : ''}>GT</option>
+          </select>
+        </div>
+        <button id="btn-new-client" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Cliente</button>
+      </div>
+      <p class="mb-2 text-xs text-slate-500">${clients.length} cliente${clients.length === 1 ? '' : 's'}</p>
+      <div class="max-h-[28rem] overflow-y-auto rounded-xl border border-slate-100">
+        <table class="min-w-full text-left text-sm">
+          <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
+            <tr>
+              <th class="px-3 py-2">País</th>
+              <th class="px-3 py-2">Código</th>
+              <th class="px-3 py-2">Cliente</th>
               <th class="px-3 py-2">Contacto</th>
-              <th class="px-3 py-2">Teléfono</th>
+              <th class="px-3 py-2">Tel</th>
+              <th class="px-3 py-2">Ejecutivo</th>
               <th class="px-3 py-2"></th>
             </tr>
           </thead>
@@ -1254,25 +1368,58 @@ function renderAdminClientes() {
                     .map(
                       (c) => `
               <tr class="border-t border-slate-100">
+                <td class="px-3 py-2">${escapeHtml(c.pais || '—')}</td>
+                <td class="px-3 py-2 text-slate-500">${escapeHtml(c.codigo || '—')}</td>
                 <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(c.nombre)}</td>
                 <td class="px-3 py-2 text-slate-600">${escapeHtml(c.contacto || '—')}</td>
                 <td class="px-3 py-2 text-slate-600">${escapeHtml(c.telefono || '—')}</td>
-                <td class="px-3 py-2 text-right">
-                  <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
+                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.vendedorNombre || '—')}</td>
+                <td class="px-3 py-2 text-right whitespace-nowrap">
+                  <button data-edit-client="${c.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
+                  <button data-del-client="${c.id}" class="ml-2 text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
                 </td>
               </tr>`
                     )
                     .join('')
-                : '<tr><td colspan="4" class="px-3 py-4 text-slate-400">Sin clientes cargados.</td></tr>'
+                : '<tr><td colspan="7" class="px-3 py-4 text-slate-400">Sin clientes.</td></tr>'
             }
           </tbody>
         </table>
       </div>
     </section>
+
+    <section id="client-editor" class="mt-4 hidden rounded-2xl border border-red-100 bg-red-50/40 p-5">
+      <h4 class="text-sm font-black uppercase tracking-wider text-red-700">Cliente</h4>
+      <form id="form-client" class="mt-3 grid gap-3 sm:grid-cols-2">
+        <input type="hidden" name="id" />
+        ${field('Código', 'codigo', { required: false })}
+        ${field('País', 'pais', {
+          type: 'select',
+          required: false,
+          value: `<option value="">—</option><option value="SV">SV</option><option value="GT">GT</option>`,
+        })}
+        ${field('Cliente', 'nombre')}
+        ${field('Contacto', 'contacto', { required: false })}
+        ${field('Teléfono', 'telefono', { required: false, type: 'tel' })}
+        ${field('Correo contacto', 'correo_contacto', { required: false, type: 'email' })}
+        ${field('Ejecutivo', 'vendedorId', {
+          type: 'select',
+          required: false,
+          value: `<option value="">Sin asignar</option>${sellerOpts}`,
+        })}
+        <div class="sm:col-span-2 flex gap-2">
+          <button class="flex-1 rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Guardar</button>
+          <button type="button" id="btn-cancel-client" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600">Cancelar</button>
+        </div>
+      </form>
+    </section>`
+        : ''
+    }
     `,
-    { title: 'Carga de clientes', showBack: true, backTo: '/admin' }
+    { title: 'Base de datos', showBack: true, backTo: '/admin' }
   );
   bindAdminSubShell();
+
   document.getElementById('btn-import-clients')?.addEventListener('click', async () => {
     const input = document.getElementById('file-clients');
     const status = document.getElementById('import-status');
@@ -1283,14 +1430,54 @@ function renderAdminClientes() {
     }
     status.textContent = 'Procesando archivo…';
     try {
-      const rows = await parseClientFile(file);
-      const { added, skipped } = importClients(rows);
-      showToast(`Importación lista: ${added} nuevos, ${skipped} omitidos.`);
-      render();
+      const { rows, omitted } = await parseClientFile(file);
+      const result = importClients(rows, { omittedFile: omitted });
+      showToast(
+        `Listo: ${result.added} nuevos, ${result.updated} actualizados, ${result.usersCreated} ejecutivos, ${result.skipped} omitidos.`
+      );
+      go('/admin/base-datos?view=ejecutivos');
     } catch (err) {
       status.textContent = '';
       showToast(err.message || 'No se pudo leer el archivo.', 'err');
     }
+  });
+
+  const applyFilters = () => {
+    const v = document.getElementById('filter-vendedor')?.value || '';
+    const p = document.getElementById('filter-pais')?.value || '';
+    const q = new URLSearchParams({ view: 'clientes' });
+    if (v) q.set('vendedor', v);
+    if (p) q.set('pais', p);
+    go(`/admin/base-datos?${q.toString()}`);
+  };
+  document.getElementById('filter-vendedor')?.addEventListener('change', applyFilters);
+  document.getElementById('filter-pais')?.addEventListener('change', applyFilters);
+
+  const editor = document.getElementById('client-editor');
+  const form = document.getElementById('form-client');
+  const openClient = (c = null) => {
+    if (!editor || !form) return;
+    editor.classList.remove('hidden');
+    form.reset();
+    form.id.value = c?.id || createId('cli');
+    form.codigo.value = c?.codigo || '';
+    form.pais.value = c?.pais || '';
+    form.nombre.value = c?.nombre || '';
+    form.contacto.value = c?.contacto || '';
+    form.telefono.value = c?.telefono || '';
+    form.correo_contacto.value = c?.correo_contacto || '';
+    form.vendedorId.value = c?.vendedorId || filterVend || '';
+    editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  document.getElementById('btn-new-client')?.addEventListener('click', () => openClient(null));
+  document.getElementById('btn-cancel-client')?.addEventListener('click', () => editor?.classList.add('hidden'));
+
+  document.querySelectorAll('[data-edit-client]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const c = getState().clients.find((x) => x.id === btn.dataset.editClient);
+      openClient(c);
+    });
   });
   document.querySelectorAll('[data-del-client]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1299,6 +1486,28 @@ function renderAdminClientes() {
       showToast('Cliente eliminado.');
       render();
     });
+  });
+
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const vendedorId = String(fd.get('vendedorId') || '').trim();
+    const seller = getState().users.find((u) => u.id === vendedorId);
+    upsertClient({
+      id: String(fd.get('id')),
+      codigo: String(fd.get('codigo') || '').trim(),
+      pais: String(fd.get('pais') || '').trim(),
+      nombre: String(fd.get('nombre') || '').trim(),
+      contacto: String(fd.get('contacto') || '').trim(),
+      telefono: String(fd.get('telefono') || '').trim(),
+      correo_contacto: String(fd.get('correo_contacto') || '').trim(),
+      vendedorId,
+      vendedorNombre: seller?.nombre || '',
+      origen: 'manual',
+      activo: true,
+    });
+    showToast('Cliente guardado.');
+    render();
   });
 }
 
@@ -1522,6 +1731,11 @@ function renderAdminUsuarios() {
           ${field('Nombre', 'nombre')}
           ${field('Cargo', 'cargo', { required: false })}
           ${field('Sucursal', 'sucursal', { required: false })}
+          ${field('País', 'pais', {
+            type: 'select',
+            required: false,
+            value: `<option value="">—</option><option value="SV">El Salvador (SV)</option><option value="GT">Guatemala (GT)</option>`,
+          })}
           ${field('Correo', 'correo', { type: 'email', required: false })}
           ${field('Correo jefe', 'correo_jefe', { type: 'email', required: false })}
           ${field('Rol', 'rol', {
@@ -1608,6 +1822,7 @@ function renderAdminUsuarios() {
     formUser.nombre.value = user?.nombre || '';
     formUser.cargo.value = user?.cargo || '';
     formUser.sucursal.value = user?.sucursal || '';
+    if (formUser.pais) formUser.pais.value = user?.pais || '';
     formUser.correo.value = user?.correo || '';
     formUser.correo_jefe.value = user?.correo_jefe || '';
     formUser.rol.value = user?.rol || 'vendedor';
@@ -1657,6 +1872,7 @@ function renderAdminUsuarios() {
       nombre: String(fd.get('nombre')).trim(),
       cargo: String(fd.get('cargo') || '').trim(),
       sucursal: String(fd.get('sucursal') || '').trim(),
+      pais: String(fd.get('pais') || '').trim().toUpperCase(),
       correo: String(fd.get('correo') || '').trim(),
       correo_jefe: String(fd.get('correo_jefe') || '').trim(),
       rol: fd.get('rol'),
@@ -1677,7 +1893,8 @@ function routeAdmin(path) {
       renderAdminConfig();
       break;
     case '/admin/clientes':
-      renderAdminClientes();
+    case '/admin/base-datos':
+      renderAdminBaseDatos();
       break;
     case '/admin/solicitudes':
       renderAdminSolicitudes();

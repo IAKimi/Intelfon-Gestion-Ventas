@@ -92,15 +92,51 @@ let memory = null;
 let syncTimer = null;
 let syncing = false;
 
+export function createId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 function normalizeUser(u) {
+  const pais = String(u.pais || '').trim().toUpperCase();
   return {
     ...u,
+    pais: pais === 'GT' || pais === 'SV' ? pais : '',
     tipos_salida: Array.isArray(u.tipos_salida) ? u.tipos_salida : [],
     tipos_visita: Array.isArray(u.tipos_visita) ? u.tipos_visita : [],
     tipos_transporte: Array.isArray(u.tipos_transporte) ? u.tipos_transporte : [],
     tipos_pago: Array.isArray(u.tipos_pago) ? u.tipos_pago : [],
     transporte_default: String(u.transporte_default || '').trim(),
     pago_combustible_default: String(u.pago_combustible_default || '').trim(),
+  };
+}
+
+function slugLogin(nombre, pais) {
+  const base = String(nombre || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 40);
+  const tag = String(pais || 'sv').toLowerCase();
+  return `${base || 'ejecutivo'}.${tag}`;
+}
+
+export function normalizeClient(c) {
+  const pais = String(c.pais || '').trim().toUpperCase();
+  return {
+    id: c.id || createId('cli'),
+    codigo: String(c.codigo || '').trim(),
+    nombre: String(c.nombre || '').trim(),
+    contacto: String(c.contacto || '').trim(),
+    telefono: String(c.telefono || '').trim(),
+    correo_contacto: String(c.correo_contacto || '').trim(),
+    pais: pais === 'GT' || pais === 'SV' ? pais : '',
+    vendedorId: c.vendedorId || '',
+    vendedorNombre: String(c.vendedorNombre || '').trim(),
+    origen: c.origen || 'manual',
+    activo: c.activo !== false,
+    createdAt: c.createdAt || new Date().toISOString(),
   };
 }
 
@@ -131,7 +167,7 @@ function applyRemotePayload(payload, sessionOverride) {
     webhookUrl: String(payload.webhookUrl || '').trim() || DEFAULT_WEBHOOK_URL,
     correo_ventas: payload.correo_ventas || DEFAULT_STATE.correo_ventas,
     catalogos: normalizeCatalogos(payload.catalogos),
-    clients: Array.isArray(payload.clients) ? payload.clients : [],
+    clients: (Array.isArray(payload.clients) ? payload.clients : []).map(normalizeClient),
     clientRequests: Array.isArray(payload.clientRequests) ? payload.clientRequests : [],
     notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
     salidas: Array.isArray(payload.salidas) ? payload.salidas : [],
@@ -162,7 +198,7 @@ function loadLocal() {
       ...parsed,
       catalogos: normalizeCatalogos(parsed.catalogos),
       users: (parsed.users?.length ? parsed.users : DEFAULT_STATE.users).map(normalizeUser),
-      clients: Array.isArray(parsed.clients) ? parsed.clients : [],
+      clients: (Array.isArray(parsed.clients) ? parsed.clients : []).map(normalizeClient),
       clientRequests: Array.isArray(parsed.clientRequests) ? parsed.clientRequests : [],
       notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
       salidas: Array.isArray(parsed.salidas) ? parsed.salidas : [],
@@ -355,8 +391,27 @@ export function resolveOptions(user, catalogKey) {
   return globalActive.filter((x) => allowed.includes(x.id));
 }
 
-export function getActiveClients() {
-  return getState().clients.filter((c) => c.activo !== false);
+export function getActiveClients(forUser = null) {
+  const user = forUser || getState().session;
+  const all = getState().clients.filter((c) => c.activo !== false);
+  if (!user || user.rol === 'admin') return all;
+  return all.filter((c) => c.vendedorId === user.id);
+}
+
+export function getClientsByVendedor(vendedorId) {
+  return getState().clients.filter((c) => c.activo !== false && c.vendedorId === vendedorId);
+}
+
+export function getEjecutivos() {
+  return getState()
+    .users.filter((u) => u.rol === 'vendedor' && u.activo !== false)
+    .slice()
+    .sort((a, b) => {
+      const pa = a.pais || 'ZZ';
+      const pb = b.pais || 'ZZ';
+      if (pa !== pb) return pa.localeCompare(pb);
+      return String(a.nombre || '').localeCompare(String(b.nombre || ''));
+    });
 }
 
 export function updateConfig({ combustibleGlobal, webhookUrl, correo_ventas, catalogoClientesActivo }) {
@@ -411,37 +466,132 @@ export function deleteCatalogItem(catalogKey, id) {
   return getState();
 }
 
-export function importClients(rows) {
+const STUB_PASSWORD = 'Cambiar123!';
+
+function findOrCreateEjecutivo(state, nombre, pais) {
+  const name = String(nombre || '').trim();
+  const country = pais === 'GT' ? 'GT' : pais === 'SV' ? 'SV' : '';
+  if (!name) return null;
+
+  let user = state.users.find(
+    (u) =>
+      u.rol === 'vendedor' &&
+      String(u.nombre || '').trim().toLowerCase() === name.toLowerCase() &&
+      (country ? String(u.pais || '') === country : true)
+  );
+  if (user) return user;
+
+  let login = slugLogin(name, country || 'xx');
+  let n = 2;
+  while (state.users.some((u) => String(u.usuario).toLowerCase() === login.toLowerCase())) {
+    login = `${slugLogin(name, country || 'xx')}.${n}`;
+    n += 1;
+  }
+
+  user = normalizeUser({
+    id: createId('vend'),
+    usuario: login,
+    password: STUB_PASSWORD,
+    nombre: name,
+    cargo: 'Ejecutivo de Ventas',
+    sucursal: country === 'GT' ? 'Guatemala' : country === 'SV' ? 'El Salvador' : '',
+    correo: '',
+    correo_jefe: '',
+    rol: 'vendedor',
+    pais: country,
+    combustible_activo: true,
+    activo: true,
+    tipos_salida: [],
+    tipos_visita: [],
+    tipos_transporte: [],
+    tipos_pago: [],
+    transporte_default: 'Moto',
+    pago_combustible_default: 'Pago por conteo',
+  });
+  state.users.push(user);
+  return user;
+}
+
+function clientMatchKey(c) {
+  const pais = String(c.pais || '').toUpperCase();
+  const codigo = String(c.codigo || '').trim().toUpperCase();
+  if (codigo) return `c:${pais}:${codigo}`;
+  return `n:${pais}:${String(c.nombre || '').trim().toLowerCase()}`;
+}
+
+/** Importa cartera INTELFON: crea stubs de ejecutivos y asigna clientes. */
+export function importClients(rows, { omittedFile = 0 } = {}) {
   const state = ensureMemory();
   let added = 0;
+  let updated = 0;
   let skipped = 0;
+  let usersCreated = 0;
+  const beforeUsers = state.users.length;
+
   for (const row of rows) {
     const nombre = String(row.nombre || '').trim();
-    const contacto = String(row.contacto || '').trim();
     if (!nombre) {
       skipped += 1;
       continue;
     }
-    const exists = state.clients.some(
-      (c) => c.nombre.toLowerCase() === nombre.toLowerCase() && c.activo !== false
-    );
-    if (exists) {
-      skipped += 1;
-      continue;
+
+    const pais = String(row.pais || '').trim().toUpperCase();
+    const ejecutivo = String(row.ejecutivo || '').trim();
+    let seller = null;
+    if (ejecutivo) {
+      const before = state.users.length;
+      seller = findOrCreateEjecutivo(state, ejecutivo, pais === 'GT' || pais === 'SV' ? pais : '');
+      if (state.users.length > before) usersCreated += 1;
     }
-    state.clients.push({
-      id: createId('cli'),
+
+    const next = normalizeClient({
+      codigo: row.codigo,
       nombre,
-      contacto,
-      telefono: String(row.telefono || '').trim(),
+      contacto: row.contacto,
+      telefono: row.telefono,
+      correo_contacto: row.correo_contacto,
+      pais: pais === 'GT' || pais === 'SV' ? pais : '',
+      vendedorId: seller?.id || '',
+      vendedorNombre: seller?.nombre || ejecutivo,
       origen: 'import',
       activo: true,
-      createdAt: new Date().toISOString(),
     });
-    added += 1;
+
+    const key = clientMatchKey(next);
+    const idx = state.clients.findIndex((c) => clientMatchKey(c) === key && c.activo !== false);
+    if (idx >= 0) {
+      state.clients[idx] = {
+        ...state.clients[idx],
+        ...next,
+        id: state.clients[idx].id,
+        createdAt: state.clients[idx].createdAt,
+      };
+      updated += 1;
+    } else {
+      state.clients.push(next);
+      added += 1;
+    }
   }
+
   save(state);
-  return { state: getState(), added, skipped };
+  return {
+    state: getState(),
+    added,
+    updated,
+    skipped: skipped + omittedFile,
+    usersCreated: usersCreated || Math.max(0, state.users.length - beforeUsers),
+    stubPassword: STUB_PASSWORD,
+  };
+}
+
+export function upsertClient(client) {
+  const state = ensureMemory();
+  const next = normalizeClient(client);
+  const idx = state.clients.findIndex((c) => c.id === next.id);
+  if (idx >= 0) state.clients[idx] = { ...state.clients[idx], ...next };
+  else state.clients.push(next);
+  save(state);
+  return getState();
 }
 
 export function deleteClient(id) {
@@ -560,9 +710,6 @@ export function deleteUser(id) {
   return getState();
 }
 
-export function createId(prefix) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
 
 function lastSalidaKey(userId) {
   return `red-last-salida-${userId}`;

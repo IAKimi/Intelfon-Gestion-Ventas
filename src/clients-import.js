@@ -16,60 +16,86 @@ function rowMap(row) {
   return map;
 }
 
-function pickNombre(row) {
-  const map = rowMap(row);
-  return (
-    map.nombre ||
-    map.empresa ||
-    map.cliente ||
-    map['nombre (empresa o cliente)'] ||
-    map['nombre empresa'] ||
-    map.company ||
-    ''
-  );
+function pick(map, ...keys) {
+  for (const k of keys) {
+    const v = map[normHeader(k)];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return '';
 }
 
-function pickContacto(row) {
-  const map = rowMap(row);
-  return (
-    map.contacto ||
-    map['nombre de contacto'] ||
-    map['nombre contacto'] ||
-    map.contact ||
-    map.persona ||
-    ''
-  );
-}
-
-function pickTelefono(row) {
-  const map = rowMap(row);
-  return (
-    map.telefono ||
-    map.tel ||
-    map.celular ||
-    map.movil ||
-    map.phone ||
-    map.whatsapp ||
-    ''
-  );
+function shouldOmitRow({ pais, codigo, cliente, ejecutivo }) {
+  const el = ejecutivo.toLowerCase();
+  const cl = cliente.toLowerCase();
+  if (!cliente) return true;
+  if (el.includes('ningun empleado') || el.includes('ningún empleado')) return true;
+  if (cl.includes('intelfon guatemala')) return true;
+  if (pais === 'GT' && codigo === 'CL000001' && cl.includes('intelfon')) return true;
+  return false;
 }
 
 /**
- * Lee un File (.csv, .xlsx, .xls) y devuelve filas { nombre, contacto, telefono }.
+ * Parsea Excel/CSV INTELFON (País…GG: Correo) o formato simple nombre/contacto/teléfono.
+ * @returns {{ rows: Array, omitted: number }}
  */
 export async function parseClientFile(file) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const raw = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
-  const clients = [];
-  for (const row of rows) {
-    const nombre = String(pickNombre(row) || '').trim();
-    const contacto = String(pickContacto(row) || '').trim();
-    const telefono = String(pickTelefono(row) || '').trim();
-    if (!nombre) continue;
-    clients.push({ nombre, contacto, telefono });
+  const rows = [];
+  let omitted = 0;
+
+  for (const row of raw) {
+    const map = rowMap(row);
+    const hasPais = Boolean(map.pais || map.country);
+    const hasEjecutivo = Boolean(map.ejecutivo || map.vendedor);
+
+    if (hasPais || hasEjecutivo || map.codigo) {
+      const pais = pick(map, 'pais', 'country').toUpperCase() || 'SV';
+      const codigo = pick(map, 'codigo', 'code', 'cod');
+      const cliente = pick(map, 'cliente', 'nombre', 'empresa');
+      const ejecutivo = pick(map, 'ejecutivo', 'vendedor');
+      const contacto = pick(map, 'gg: nombre', 'gg nombre', 'contacto', 'nombre de contacto');
+      const telFijo = pick(map, 'gg: tel fijo', 'gg tel fijo', 'tel fijo', 'telefono fijo');
+      const celular = pick(map, 'gg: celular', 'gg celular', 'celular', 'telefono', 'tel');
+      const correo = pick(map, 'gg: correo', 'gg correo', 'correo', 'email');
+
+      if (shouldOmitRow({ pais, codigo, cliente, ejecutivo })) {
+        omitted += 1;
+        continue;
+      }
+
+      rows.push({
+        pais: pais === 'GT' ? 'GT' : 'SV',
+        codigo,
+        nombre: cliente,
+        ejecutivo,
+        contacto,
+        telefono: celular || telFijo,
+        correo_contacto: correo,
+      });
+      continue;
+    }
+
+    const nombre = pick(map, 'nombre', 'empresa', 'cliente', 'nombre (empresa o cliente)');
+    const contacto = pick(map, 'contacto', 'nombre de contacto', 'nombre contacto', 'contact');
+    const telefono = pick(map, 'telefono', 'tel', 'celular', 'movil', 'phone');
+    if (!nombre) {
+      omitted += 1;
+      continue;
+    }
+    rows.push({
+      pais: '',
+      codigo: '',
+      nombre,
+      ejecutivo: '',
+      contacto,
+      telefono,
+      correo_contacto: '',
+    });
   }
-  return clients;
+
+  return { rows, omitted };
 }
