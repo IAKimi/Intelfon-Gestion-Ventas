@@ -1318,7 +1318,7 @@ function renderAdminSolicitudes() {
                   (r) => `
           <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
             <div class="text-sm font-black text-slate-900">${escapeHtml(r.nombre)}</div>
-            <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')} · Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
+            <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')}${r.telefono ? ` · Tel: ${escapeHtml(r.telefono)}` : ''} · Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
             ${r.notas ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(r.notas)}</p>` : ''}
             <div class="mt-3 flex flex-wrap gap-2">
               <button data-approve="${r.id}" class="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprobar</button>
