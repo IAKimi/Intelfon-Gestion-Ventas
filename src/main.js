@@ -260,6 +260,11 @@ const ICONS = {
   visita: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`,
   reintegro: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 10v-1m9-5a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
   cliente: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>`,
+  config: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+  carga: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>`,
+  solicitudes: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>`,
+  catalogos: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>`,
+  usuarios: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>`,
 };
 
 function actionCard(path, title, desc, iconKey) {
@@ -698,6 +703,7 @@ function renderRegistrarCliente() {
 }
 
 function catalogBlock(meta, items) {
+  const activeCount = items.filter((x) => x.activo !== false).length;
   const rows = items
     .map(
       (it) => `
@@ -713,22 +719,32 @@ function catalogBlock(meta, items) {
     .join('');
 
   return `
-    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-catalog="${meta.key}">
-      <div class="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">${meta.title}</h3>
+    <details class="group rounded-2xl border border-slate-200 bg-white shadow-sm" data-catalog="${meta.key}">
+      <summary class="flex cursor-pointer list-none items-start justify-between gap-3 p-4 sm:p-5 [&::-webkit-details-marker]:hidden">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">${meta.title}</h3>
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">${activeCount}/${items.length} activas</span>
+          </div>
           <p class="mt-1 text-xs text-slate-500">${meta.hint}</p>
         </div>
-        <button type="button" data-cat-add="${meta.key}" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-red-200 hover:text-red-600">+ Agregar</button>
+        <span class="mt-0.5 shrink-0 rounded-full border border-slate-200 p-1.5 text-slate-400 transition group-open:rotate-180 group-open:border-red-200 group-open:text-red-600">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+        </span>
+      </summary>
+      <div class="border-t border-slate-100 px-4 pb-4 pt-3 sm:px-5 sm:pb-5">
+        <div class="mb-3 flex justify-end">
+          <button type="button" data-cat-add="${meta.key}" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-red-200 hover:text-red-600">+ Agregar</button>
+        </div>
+        <div class="space-y-2">${rows || '<p class="text-sm text-slate-400">Sin opciones aún.</p>'}</div>
+        <form data-cat-form="${meta.key}" class="mt-3 hidden grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <input type="hidden" name="id" />
+          <input name="label" required placeholder="Nombre de la opción" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-red-500" />
+          <button class="rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white">Guardar</button>
+          <button type="button" data-cat-cancel="${meta.key}" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Cancelar</button>
+        </form>
       </div>
-      <div class="space-y-2">${rows || '<p class="text-sm text-slate-400">Sin opciones aún.</p>'}</div>
-      <form data-cat-form="${meta.key}" class="mt-3 hidden grid gap-2 sm:grid-cols-[1fr_auto_auto]">
-        <input type="hidden" name="id" />
-        <input name="label" required placeholder="Nombre de la opción" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-red-500" />
-        <button class="rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white">Guardar</button>
-        <button type="button" data-cat-cancel="${meta.key}" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Cancelar</button>
-      </form>
-    </section>
+    </details>
   `;
 }
 
@@ -765,9 +781,340 @@ function userOptionChecks(catalogKey, globalItems, userSelectedIds) {
   `;
 }
 
-function renderAdmin() {
+function renderAdminHub() {
   const state = getState();
+  const pending = state.clientRequests.filter((r) => r.estado === 'pendiente').length;
+  const clients = state.clients.filter((c) => c.activo !== false).length;
 
+  app.innerHTML = shell(
+    `
+    <div class="mb-5">
+      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Administración</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">Panel de configuración</h2>
+      <p class="mt-1 text-sm text-slate-500">Seleccione el módulo que desea gestionar.</p>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+          ${clients} cliente${clients === 1 ? '' : 's'}
+        </div>
+        ${
+          pending
+            ? `<div class="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">${pending} solicitud${pending > 1 ? 'es' : ''}</div>`
+            : ''
+        }
+      </div>
+    </div>
+    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4">
+      ${actionCard('/admin/config', 'Configuración global', 'Combustible, catálogo y webhook.', 'config')}
+      ${actionCard('/admin/clientes', 'Carga de clientes', 'Importar y mantener el listado.', 'carga')}
+      ${actionCard('/admin/solicitudes', 'Solicitudes', pending ? `${pending} pendiente${pending > 1 ? 's' : ''}.` : 'Aprobar o rechazar altas.', 'solicitudes')}
+      ${actionCard('/admin/catalogos', 'Catálogos globales', 'Opciones de formularios.', 'catalogos')}
+      ${actionCard('/admin/usuarios', 'Usuarios', 'Perfiles, roles y permisos.', 'usuarios')}
+    </div>
+    `,
+    { title: 'Administración' }
+  );
+  bindShell('/admin/login');
+}
+
+function bindAdminSubShell() {
+  bindShell('/admin/login');
+}
+
+function renderAdminConfig() {
+  const state = getState();
+  app.innerHTML = shell(
+    `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Configuración global</h3>
+      <p class="mt-1 text-xs text-slate-500">Parámetros que aplican a toda la plataforma.</p>
+      <form id="form-config" class="mt-4 space-y-4">
+        <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
+          <div>
+            <div class="text-sm font-bold text-slate-900">Combustible global</div>
+            <p class="text-xs text-slate-500">Si está activo, todos los usuarios heredan combustible ON.</p>
+          </div>
+          ${iosSwitch('combustibleGlobal', state.combustibleGlobal)}
+        </div>
+        <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
+          <div>
+            <div class="text-sm font-bold text-slate-900">Catálogo de clientes</div>
+            <p class="text-xs text-slate-500">OFF = el vendedor escribe libre. ON = debe elegir de la lista.</p>
+          </div>
+          ${iosSwitch('catalogoClientesActivo', state.catalogoClientesActivo)}
+        </div>
+        ${field('Webhook Make', 'webhookUrl', {
+          value: state.webhookUrl,
+          required: false,
+          placeholder: 'https://hook.us2.make.com/...',
+        })}
+        ${field('Correo Ventas (aprobaciones)', 'correo_ventas', {
+          value: state.correo_ventas,
+          required: false,
+          type: 'email',
+          placeholder: 'ventas@red.com.sv',
+        })}
+        <button class="inline-flex items-center justify-center rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase tracking-tight text-white transition hover:bg-red-700">Guardar configuración</button>
+      </form>
+    </section>
+    `,
+    { title: 'Configuración global', showBack: true, backTo: '/admin' }
+  );
+  bindAdminSubShell();
+  document.getElementById('form-config').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    updateConfig({
+      combustibleGlobal: fd.get('combustibleGlobal') === 'on',
+      catalogoClientesActivo: fd.get('catalogoClientesActivo') === 'on',
+      webhookUrl: fd.get('webhookUrl'),
+      correo_ventas: fd.get('correo_ventas'),
+    });
+    showToast('Configuración guardada.');
+    render();
+  });
+}
+
+function renderAdminClientes() {
+  const state = getState();
+  const clients = state.clients.filter((c) => c.activo !== false);
+  app.innerHTML = shell(
+    `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Carga de clientes</h3>
+      <p class="mt-1 text-xs text-slate-500">
+        Carga masiva por Excel/CSV (<strong>nombre</strong>, <strong>contacto</strong>).
+        ${
+          state.catalogoClientesActivo
+            ? '<span class="font-semibold text-emerald-700"> Catálogo ON: obligatorio en formularios.</span>'
+            : '<span class="font-semibold text-slate-500"> Catálogo OFF: formularios en modo libre.</span>'
+        }
+      </p>
+      <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <input id="file-clients" type="file" accept=".csv,.xlsx,.xls" class="w-full flex-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm" />
+        <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
+      </div>
+      <p id="import-status" class="mt-2 text-xs text-slate-500"></p>
+      <div class="mt-4 max-h-[28rem] overflow-y-auto rounded-xl border border-slate-100">
+        <table class="min-w-full text-left text-sm">
+          <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
+            <tr>
+              <th class="px-3 py-2">Nombre</th>
+              <th class="px-3 py-2">Contacto</th>
+              <th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              clients.length
+                ? clients
+                    .map(
+                      (c) => `
+              <tr class="border-t border-slate-100">
+                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(c.nombre)}</td>
+                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.contacto || '—')}</td>
+                <td class="px-3 py-2 text-right">
+                  <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
+                </td>
+              </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="3" class="px-3 py-4 text-slate-400">Sin clientes cargados.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+    `,
+    { title: 'Carga de clientes', showBack: true, backTo: '/admin' }
+  );
+  bindAdminSubShell();
+  document.getElementById('btn-import-clients')?.addEventListener('click', async () => {
+    const input = document.getElementById('file-clients');
+    const status = document.getElementById('import-status');
+    const file = input?.files?.[0];
+    if (!file) {
+      showToast('Seleccione un archivo Excel o CSV.', 'err');
+      return;
+    }
+    status.textContent = 'Procesando archivo…';
+    try {
+      const rows = await parseClientFile(file);
+      const { added, skipped } = importClients(rows);
+      showToast(`Importación lista: ${added} nuevos, ${skipped} omitidos.`);
+      render();
+    } catch (err) {
+      status.textContent = '';
+      showToast(err.message || 'No se pudo leer el archivo.', 'err');
+    }
+  });
+  document.querySelectorAll('[data-del-client]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!confirm('¿Eliminar este cliente?')) return;
+      deleteClient(btn.dataset.delClient);
+      showToast('Cliente eliminado.');
+      render();
+    });
+  });
+}
+
+function renderAdminSolicitudes() {
+  const state = getState();
+  const pendingReqs = state.clientRequests.filter((r) => r.estado === 'pendiente');
+  app.innerHTML = shell(
+    `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Solicitudes</h3>
+      <p class="mt-1 text-xs text-slate-500">Apruebe o rechace altas pedidas por vendedores.</p>
+      <div class="mt-4 space-y-3">
+        ${
+          pendingReqs.length
+            ? pendingReqs
+                .map(
+                  (r) => `
+          <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+            <div class="text-sm font-black text-slate-900">${escapeHtml(r.nombre)}</div>
+            <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')} · Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
+            ${r.notas ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(r.notas)}</p>` : ''}
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button data-approve="${r.id}" class="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprobar</button>
+              <button data-reject="${r.id}" class="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white">Rechazar</button>
+            </div>
+          </div>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400">No hay solicitudes pendientes.</p>'
+        }
+      </div>
+    </section>
+    `,
+    { title: 'Solicitudes', showBack: true, backTo: '/admin' }
+  );
+  bindAdminSubShell();
+  document.querySelectorAll('[data-approve]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const { request } = resolveClientRequest(btn.dataset.approve, 'aprobado');
+      if (!request) return;
+      await sendToMake({
+        formulario: 'solicitud_cliente',
+        request_id: request.id,
+        nombre_cliente: request.nombre,
+        contacto_cliente: request.contacto,
+        correo_vendedor: request.vendedorCorreo,
+        correo_ventas: getState().correo_ventas,
+        accion: 'aprobado',
+        vendedor: request.vendedorNombre,
+      });
+      showToast('Cliente aprobado y notificado.');
+      render();
+    });
+  });
+  document.querySelectorAll('[data-reject]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const motivo = prompt('Motivo del rechazo (opcional):') || '';
+      const { request } = resolveClientRequest(btn.dataset.reject, 'rechazado', motivo);
+      if (!request) return;
+      await sendToMake({
+        formulario: 'solicitud_cliente',
+        request_id: request.id,
+        nombre_cliente: request.nombre,
+        contacto_cliente: request.contacto,
+        correo_vendedor: request.vendedorCorreo,
+        correo_ventas: getState().correo_ventas,
+        accion: 'rechazado',
+        motivo,
+        vendedor: request.vendedorNombre,
+      });
+      showToast('Solicitud rechazada y notificada.');
+      render();
+    });
+  });
+}
+
+function bindCatalogHandlers() {
+  document.querySelectorAll('[data-cat-toggle]').forEach((input) => {
+    input.addEventListener('change', () => {
+      setCatalogItemActive(input.dataset.catToggle, input.dataset.catId, input.checked);
+      showToast(input.checked ? 'Opción activada.' : 'Opción desactivada.');
+    });
+  });
+  document.querySelectorAll('[data-cat-add]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = btn.dataset.catAdd;
+      const details = document.querySelector(`[data-catalog="${key}"]`);
+      if (details) details.open = true;
+      const form = document.querySelector(`[data-cat-form="${key}"]`);
+      form.classList.remove('hidden');
+      form.reset();
+      form.id.value = createId('cat');
+      form.label.focus();
+    });
+  });
+  document.querySelectorAll('[data-cat-cancel]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelector(`[data-cat-form="${btn.dataset.catCancel}"]`)?.classList.add('hidden');
+    });
+  });
+  document.querySelectorAll('[data-cat-edit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.catEdit;
+      const item = getState().catalogos[key].find((x) => x.id === btn.dataset.catId);
+      if (!item) return;
+      const details = document.querySelector(`[data-catalog="${key}"]`);
+      if (details) details.open = true;
+      const form = document.querySelector(`[data-cat-form="${key}"]`);
+      form.classList.remove('hidden');
+      form.id.value = item.id;
+      form.label.value = item.label;
+      form.label.focus();
+    });
+  });
+  document.querySelectorAll('[data-cat-del]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!confirm('¿Eliminar esta opción del catálogo?')) return;
+      deleteCatalogItem(btn.dataset.catDel, btn.dataset.catId);
+      showToast('Opción eliminada.');
+      render();
+    });
+  });
+  document.querySelectorAll('[data-cat-form]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const key = form.dataset.catForm;
+      const fd = new FormData(form);
+      const existing = getState().catalogos[key].find((x) => x.id === fd.get('id'));
+      upsertCatalogItem(key, {
+        id: fd.get('id'),
+        label: fd.get('label'),
+        activo: existing ? existing.activo : true,
+      });
+      showToast('Opción guardada.');
+      render();
+    });
+  });
+}
+
+function renderAdminCatalogos() {
+  const state = getState();
+  app.innerHTML = shell(
+    `
+    <div class="mb-4">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Catálogos globales</h3>
+      <p class="mt-1 text-xs text-slate-500">Expanda cada bloque para editar las opciones de los formularios.</p>
+    </div>
+    <div class="space-y-3">
+      ${CATALOG_META.map((meta) => catalogBlock(meta, state.catalogos[meta.key] || [])).join('')}
+    </div>
+    `,
+    { title: 'Catálogos globales', showBack: true, backTo: '/admin' }
+  );
+  bindAdminSubShell();
+  bindCatalogHandlers();
+}
+
+function renderAdminUsuarios() {
+  const state = getState();
   const usersRows = state.users
     .map(
       (u) => `
@@ -792,128 +1139,14 @@ function renderAdmin() {
     )
     .join('');
 
-  const pendingReqs = state.clientRequests.filter((r) => r.estado === 'pendiente');
-  const clients = state.clients.filter((c) => c.activo !== false);
-
   app.innerHTML = shell(
     `
-    <div class="stagger space-y-5">
-      <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Configuración global</h3>
-        <form id="form-config" class="mt-4 space-y-4">
-          <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
-            <div>
-              <div class="text-sm font-bold text-slate-900">Combustible global</div>
-              <p class="text-xs text-slate-500">Si está activo, todos los usuarios heredan combustible ON.</p>
-            </div>
-            ${iosSwitch('combustibleGlobal', state.combustibleGlobal)}
-          </div>
-          <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 px-4 py-3">
-            <div>
-              <div class="text-sm font-bold text-slate-900">Catálogo de clientes</div>
-              <p class="text-xs text-slate-500">OFF = el vendedor escribe libre. ON = debe elegir de la lista (import/aprobación).</p>
-            </div>
-            ${iosSwitch('catalogoClientesActivo', state.catalogoClientesActivo)}
-          </div>
-          ${field('Webhook Make', 'webhookUrl', {
-            value: state.webhookUrl,
-            required: false,
-            placeholder: 'https://hook.us2.make.com/...',
-          })}
-          ${field('Correo Ventas (aprobaciones)', 'correo_ventas', {
-            value: state.correo_ventas,
-            required: false,
-            type: 'email',
-            placeholder: 'ventas@red.com.sv',
-          })}
-          <button class="inline-flex items-center justify-center rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase tracking-tight text-white transition hover:bg-red-700">Guardar configuración</button>
-        </form>
-      </section>
-
-      <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Clientes</h3>
-        <p class="mt-1 text-xs text-slate-500">
-          Carga masiva por Excel/CSV (<strong>nombre</strong>, <strong>contacto</strong>).
-          ${
-            state.catalogoClientesActivo
-              ? '<span class="font-semibold text-emerald-700"> Catálogo ON: obligatorio en formularios.</span>'
-              : '<span class="font-semibold text-slate-500"> Catálogo OFF: formularios en modo libre.</span>'
-          }
-        </p>
-        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input id="file-clients" type="file" accept=".csv,.xlsx,.xls" class="w-full flex-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm" />
-          <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
-        </div>
-        <p id="import-status" class="mt-2 text-xs text-slate-500"></p>
-        <div class="mt-4 max-h-56 overflow-y-auto rounded-xl border border-slate-100">
-          <table class="min-w-full text-left text-sm">
-            <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
-              <tr>
-                <th class="px-3 py-2">Nombre</th>
-                <th class="px-3 py-2">Contacto</th>
-                <th class="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${
-                clients.length
-                  ? clients
-                      .map(
-                        (c) => `
-                <tr class="border-t border-slate-100">
-                  <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(c.nombre)}</td>
-                  <td class="px-3 py-2 text-slate-600">${escapeHtml(c.contacto || '—')}</td>
-                  <td class="px-3 py-2 text-right">
-                    <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
-                  </td>
-                </tr>`
-                      )
-                      .join('')
-                  : '<tr><td colspan="3" class="px-3 py-4 text-slate-400">Sin clientes cargados.</td></tr>'
-              }
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Solicitudes de clientes</h3>
-        <p class="mt-1 text-xs text-slate-500">Apruebe o rechace altas pedidas por vendedores. Make puede notificar por correo con el mismo webhook.</p>
-        <div class="mt-4 space-y-3">
-          ${
-            pendingReqs.length
-              ? pendingReqs
-                  .map(
-                    (r) => `
-            <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
-              <div class="text-sm font-black text-slate-900">${escapeHtml(r.nombre)}</div>
-              <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')} · Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
-              ${r.notas ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(r.notas)}</p>` : ''}
-              <div class="mt-3 flex flex-wrap gap-2">
-                <button data-approve="${r.id}" class="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprobar</button>
-                <button data-reject="${r.id}" class="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white">Rechazar</button>
-              </div>
-            </div>`
-                  )
-                  .join('')
-              : '<p class="text-sm text-slate-400">No hay solicitudes pendientes.</p>'
-          }
-        </div>
-      </section>
-
-      <div>
-        <h3 class="mb-1 text-sm font-black uppercase tracking-wider text-slate-900">Catálogos globales</h3>
-        <p class="mb-3 text-xs text-slate-500">Lo que ve el vendedor en los formularios. Active/desactive o agregue opciones.</p>
-        <div class="space-y-4">
-          ${CATALOG_META.map((meta) => catalogBlock(meta, state.catalogos[meta.key] || [])).join('')}
-        </div>
-      </div>
-
+    <div class="space-y-5">
       <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div class="mb-4 flex items-center justify-between gap-3">
           <div>
             <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Usuarios</h3>
-            <p class="mt-1 text-xs text-slate-500">Por perfil puede limitar transporte, pago y tipos de visita.</p>
+            <p class="mt-1 text-xs text-slate-500">Perfiles, roles y opciones heredadas de catálogos.</p>
           </div>
           <button id="btn-new-user" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Nuevo</button>
         </div>
@@ -961,160 +1194,14 @@ function renderAdmin() {
       </section>
     </div>
     `,
-    { title: 'Configuración' }
+    { title: 'Usuarios', showBack: true, backTo: '/admin' }
   );
-
-  bindShell('/admin/login');
-
-  document.getElementById('form-config').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    updateConfig({
-      combustibleGlobal: fd.get('combustibleGlobal') === 'on',
-      catalogoClientesActivo: fd.get('catalogoClientesActivo') === 'on',
-      webhookUrl: fd.get('webhookUrl'),
-      correo_ventas: fd.get('correo_ventas'),
-    });
-    showToast('Configuración guardada.');
-    render();
-  });
-
-  document.getElementById('btn-import-clients')?.addEventListener('click', async () => {
-    const input = document.getElementById('file-clients');
-    const status = document.getElementById('import-status');
-    const file = input?.files?.[0];
-    if (!file) {
-      showToast('Seleccione un archivo Excel o CSV.', 'err');
-      return;
-    }
-    status.textContent = 'Procesando archivo…';
-    try {
-      const rows = await parseClientFile(file);
-      const { added, skipped } = importClients(rows);
-      showToast(`Importación lista: ${added} nuevos, ${skipped} omitidos.`);
-      render();
-    } catch (err) {
-      status.textContent = '';
-      showToast(err.message || 'No se pudo leer el archivo.', 'err');
-    }
-  });
-
-  document.querySelectorAll('[data-del-client]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!confirm('¿Eliminar este cliente?')) return;
-      deleteClient(btn.dataset.delClient);
-      showToast('Cliente eliminado.');
-      render();
-    });
-  });
-
-  document.querySelectorAll('[data-approve]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const { request } = resolveClientRequest(btn.dataset.approve, 'aprobado');
-      if (!request) return;
-      await sendToMake({
-        formulario: 'solicitud_cliente',
-        request_id: request.id,
-        nombre_cliente: request.nombre,
-        contacto_cliente: request.contacto,
-        correo_vendedor: request.vendedorCorreo,
-        correo_ventas: getState().correo_ventas,
-        accion: 'aprobado',
-        vendedor: request.vendedorNombre,
-      });
-      showToast('Cliente aprobado y notificado.');
-      render();
-    });
-  });
-
-  document.querySelectorAll('[data-reject]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const motivo = prompt('Motivo del rechazo (opcional):') || '';
-      const { request } = resolveClientRequest(btn.dataset.reject, 'rechazado', motivo);
-      if (!request) return;
-      await sendToMake({
-        formulario: 'solicitud_cliente',
-        request_id: request.id,
-        nombre_cliente: request.nombre,
-        contacto_cliente: request.contacto,
-        correo_vendedor: request.vendedorCorreo,
-        correo_ventas: getState().correo_ventas,
-        accion: 'rechazado',
-        motivo,
-        vendedor: request.vendedorNombre,
-      });
-      showToast('Solicitud rechazada y notificada.');
-      render();
-    });
-  });
+  bindAdminSubShell();
 
   document.querySelectorAll('[data-toggle-fuel]').forEach((input) => {
     input.addEventListener('change', () => {
       setUserCombustible(input.dataset.toggleFuel, input.checked);
       showToast(input.checked ? 'Combustible activado.' : 'Combustible desactivado.');
-    });
-  });
-
-  // Catálogos
-  document.querySelectorAll('[data-cat-toggle]').forEach((input) => {
-    input.addEventListener('change', () => {
-      setCatalogItemActive(input.dataset.catToggle, input.dataset.catId, input.checked);
-      showToast(input.checked ? 'Opción activada.' : 'Opción desactivada.');
-    });
-  });
-
-  document.querySelectorAll('[data-cat-add]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.catAdd;
-      const form = document.querySelector(`[data-cat-form="${key}"]`);
-      form.classList.remove('hidden');
-      form.reset();
-      form.id.value = createId('cat');
-      form.label.focus();
-    });
-  });
-
-  document.querySelectorAll('[data-cat-cancel]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelector(`[data-cat-form="${btn.dataset.catCancel}"]`)?.classList.add('hidden');
-    });
-  });
-
-  document.querySelectorAll('[data-cat-edit]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.catEdit;
-      const item = getState().catalogos[key].find((x) => x.id === btn.dataset.catId);
-      if (!item) return;
-      const form = document.querySelector(`[data-cat-form="${key}"]`);
-      form.classList.remove('hidden');
-      form.id.value = item.id;
-      form.label.value = item.label;
-      form.label.focus();
-    });
-  });
-
-  document.querySelectorAll('[data-cat-del]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (!confirm('¿Eliminar esta opción del catálogo?')) return;
-      deleteCatalogItem(btn.dataset.catDel, btn.dataset.catId);
-      showToast('Opción eliminada.');
-      render();
-    });
-  });
-
-  document.querySelectorAll('[data-cat-form]').forEach((form) => {
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const key = form.dataset.catForm;
-      const fd = new FormData(form);
-      const existing = getState().catalogos[key].find((x) => x.id === fd.get('id'));
-      upsertCatalogItem(key, {
-        id: fd.get('id'),
-        label: fd.get('label'),
-        activo: existing ? existing.activo : true,
-      });
-      showToast('Opción guardada.');
-      render();
     });
   });
 
@@ -1215,6 +1302,31 @@ function renderAdmin() {
   });
 }
 
+function routeAdmin(path) {
+  switch (path) {
+    case '/admin/config':
+      renderAdminConfig();
+      break;
+    case '/admin/clientes':
+      renderAdminClientes();
+      break;
+    case '/admin/solicitudes':
+      renderAdminSolicitudes();
+      break;
+    case '/admin/catalogos':
+      renderAdminCatalogos();
+      break;
+    case '/admin/usuarios':
+      renderAdminUsuarios();
+      break;
+    case '/admin':
+      renderAdminHub();
+      break;
+    default:
+      go('/admin', { replace: true, animate: false });
+  }
+}
+
 function render() {
   const path = pathOf();
   const state = getState();
@@ -1240,7 +1352,7 @@ function render() {
       go('/admin/login', { replace: true, animate: false });
       return;
     }
-    renderAdmin();
+    routeAdmin(path);
     return;
   }
 
