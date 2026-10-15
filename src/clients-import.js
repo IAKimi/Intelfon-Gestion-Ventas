@@ -24,18 +24,57 @@ function pick(map, ...keys) {
   return '';
 }
 
-function shouldOmitRow({ pais, codigo, cliente, ejecutivo }) {
-  const el = ejecutivo.toLowerCase();
-  const cl = cliente.toLowerCase();
+function roleFrom(map, prefix) {
+  const p = normHeader(prefix);
+  return {
+    nombre: pick(map, `${p}: nombre`, `${p} nombre`),
+    tel_fijo: pick(map, `${p}: tel fijo`, `${p} tel fijo`),
+    celular: pick(map, `${p}: celular`, `${p} celular`),
+    correo: pick(map, `${p}: correo`, `${p} correo`),
+  };
+}
+
+/** Prioridad: GG → GO → GF. */
+export function resolveContactoPrincipal(gg, go, gf) {
+  for (const [rol, data] of [
+    ['GG', gg],
+    ['GO', go],
+    ['GF', gf],
+  ]) {
+    if (data?.nombre) {
+      return {
+        contacto_rol: rol,
+        contacto: data.nombre,
+        telefono: data.celular || data.tel_fijo || '',
+        correo_contacto: data.correo || '',
+        telefono_fijo: data.tel_fijo || '',
+      };
+    }
+  }
+  return {
+    contacto_rol: '',
+    contacto: '',
+    telefono: '',
+    correo_contacto: '',
+    telefono_fijo: '',
+  };
+}
+
+export function shouldOmitRow({ pais, codigo, cliente, ejecutivo }) {
+  const el = String(ejecutivo || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const cl = String(cliente || '').toLowerCase();
   if (!cliente) return true;
-  if (el.includes('ningun empleado') || el.includes('ningún empleado')) return true;
+  if (el.includes('ningun empleado')) return true;
   if (cl.includes('intelfon guatemala')) return true;
   if (pais === 'GT' && codigo === 'CL000001' && cl.includes('intelfon')) return true;
   return false;
 }
 
 /**
- * Parsea Excel/CSV INTELFON (País…GG: Correo) o formato simple nombre/contacto/teléfono.
+ * Parsea Excel/CSV INTELFON o formato simple.
  * @returns {{ rows: Array, omitted: number }}
  */
 export async function parseClientFile(file) {
@@ -43,7 +82,10 @@ export async function parseClientFile(file) {
   const wb = XLSX.read(buf, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  return parseClientRows(raw);
+}
 
+export function parseClientRows(raw) {
   const rows = [];
   let omitted = 0;
 
@@ -57,10 +99,10 @@ export async function parseClientFile(file) {
       const codigo = pick(map, 'codigo', 'code', 'cod');
       const cliente = pick(map, 'cliente', 'nombre', 'empresa');
       const ejecutivo = pick(map, 'ejecutivo', 'vendedor');
-      const contacto = pick(map, 'gg: nombre', 'gg nombre', 'contacto', 'nombre de contacto');
-      const telFijo = pick(map, 'gg: tel fijo', 'gg tel fijo', 'tel fijo', 'telefono fijo');
-      const celular = pick(map, 'gg: celular', 'gg celular', 'celular', 'telefono', 'tel');
-      const correo = pick(map, 'gg: correo', 'gg correo', 'correo', 'email');
+      const gg = roleFrom(map, 'GG');
+      const gf = roleFrom(map, 'GF');
+      const go = roleFrom(map, 'GO');
+      const primary = resolveContactoPrincipal(gg, go, gf);
 
       if (shouldOmitRow({ pais, codigo, cliente, ejecutivo })) {
         omitted += 1;
@@ -72,9 +114,10 @@ export async function parseClientFile(file) {
         codigo,
         nombre: cliente,
         ejecutivo,
-        contacto,
-        telefono: celular || telFijo,
-        correo_contacto: correo,
+        ...primary,
+        gg,
+        go,
+        gf,
       });
       continue;
     }
@@ -94,6 +137,11 @@ export async function parseClientFile(file) {
       contacto,
       telefono,
       correo_contacto: '',
+      telefono_fijo: '',
+      contacto_rol: '',
+      gg: null,
+      go: null,
+      gf: null,
     });
   }
 

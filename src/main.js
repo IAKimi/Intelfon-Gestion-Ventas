@@ -456,9 +456,9 @@ function clientFieldsHtml({
   const opts = clients
     .map(
       (c) =>
-        `<option value="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" ${
+        `<option value="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" data-correo="${escapeHtml(c.correo_contacto || '')}" ${
           c.nombre === selected ? 'selected' : ''
-        }>${escapeHtml(c.nombre)}</option>`
+        }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
     )
     .join('');
   return `

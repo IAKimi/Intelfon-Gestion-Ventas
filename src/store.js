@@ -122,6 +122,16 @@ function slugLogin(nombre, pais) {
   return `${base || 'ejecutivo'}.${tag}`;
 }
 
+function normalizeRole(r) {
+  if (!r || typeof r !== 'object') return { nombre: '', tel_fijo: '', celular: '', correo: '' };
+  return {
+    nombre: String(r.nombre || '').trim(),
+    tel_fijo: String(r.tel_fijo || '').trim(),
+    celular: String(r.celular || '').trim(),
+    correo: String(r.correo || '').trim(),
+  };
+}
+
 export function normalizeClient(c) {
   const pais = String(c.pais || '').trim().toUpperCase();
   return {
@@ -130,7 +140,12 @@ export function normalizeClient(c) {
     nombre: String(c.nombre || '').trim(),
     contacto: String(c.contacto || '').trim(),
     telefono: String(c.telefono || '').trim(),
+    telefono_fijo: String(c.telefono_fijo || '').trim(),
     correo_contacto: String(c.correo_contacto || '').trim(),
+    contacto_rol: String(c.contacto_rol || '').trim(),
+    gg: normalizeRole(c.gg),
+    go: normalizeRole(c.go),
+    gf: normalizeRole(c.gf),
     pais: pais === 'GT' || pais === 'SV' ? pais : '',
     vendedorId: c.vendedorId || '',
     vendedorNombre: String(c.vendedorNombre || '').trim(),
@@ -549,7 +564,12 @@ export function importClients(rows, { omittedFile = 0 } = {}) {
       nombre,
       contacto: row.contacto,
       telefono: row.telefono,
+      telefono_fijo: row.telefono_fijo,
       correo_contacto: row.correo_contacto,
+      contacto_rol: row.contacto_rol,
+      gg: row.gg,
+      go: row.go,
+      gf: row.gf,
       pais: pais === 'GT' || pais === 'SV' ? pais : '',
       vendedorId: seller?.id || '',
       vendedorNombre: seller?.nombre || ejecutivo,
