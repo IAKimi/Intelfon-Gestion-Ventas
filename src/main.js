@@ -24,6 +24,7 @@ import {
   importClients,
   upsertClient,
   deleteClient,
+  updateClientContact,
   createClientRequest,
   resolveClientRequest,
   getUserNotifications,
@@ -575,7 +576,8 @@ function renderHome() {
           : 'Elija una salida pendiente.',
         'visita'
       )}
-      ${actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro')}
+      ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
+      ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
       ${
         isCatalogoClientesActivo()
           ? actionCard('/cliente', 'Registrar cliente', 'Solicitud con aprobación.', 'cliente')
@@ -872,11 +874,15 @@ function renderVisitaForm(salidaId) {
           rows: 3,
           required: false,
         })}
-        <div class="grid gap-4 sm:grid-cols-2 sm:gap-5">
+        ${
+          resolveCombustible(user)
+            ? `<div class="grid gap-4 sm:grid-cols-2 sm:gap-5">
           ${readonlyInfo('Tipo de transporte', transporteDefault || 'Sin asignar (configure en Admin → Usuarios)')}
           ${readonlyInfo('Tipo de pago combustible', pagoDefault || 'Sin asignar (configure en Admin → Usuarios)')}
         </div>
-        <p class="text-[11px] leading-relaxed text-slate-400">Transporte y pago los define el administrador en su perfil. Se envían así al reporte.</p>
+        <p class="text-[11px] leading-relaxed text-slate-400">Transporte y pago los define el administrador en su perfil. Se envían así al reporte.</p>`
+            : `<p class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500">Reintegro de combustible desactivado: este reporte no calcula transporte ni pago.</p>`
+        }
         <div>
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica <span class="font-semibold normal-case tracking-normal text-slate-400">(opcional)</span></label>
           <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm" />
@@ -896,9 +902,10 @@ function renderVisitaForm(salidaId) {
       throw new Error('La salida ya no está pendiente.');
     }
     const freshUser = getState().session;
-    const transporte = freshUser?.transporte_default || '';
-    const pago = freshUser?.pago_combustible_default || '';
-    if (!transporte || !pago) {
+    const fuelOn = resolveCombustible(freshUser);
+    const transporte = fuelOn ? freshUser?.transporte_default || '' : '';
+    const pago = fuelOn ? freshUser?.pago_combustible_default || '' : '';
+    if (fuelOn && (!transporte || !pago)) {
       throw new Error('Su perfil no tiene transporte o pago asignados. Contacte al administrador.');
     }
     btn.textContent = 'Obteniendo GPS…';
@@ -957,6 +964,11 @@ function renderVisita() {
 }
 
 function renderReintegro() {
+  if (!resolveCombustible(getState().session)) {
+    showToast('El reintegro de combustible está desactivado.', 'err');
+    go('/', { replace: true, animate: false });
+    return;
+  }
   const today = new Date();
   const start = new Date(today);
   start.setDate(today.getDate() - 6);
@@ -985,6 +997,97 @@ function renderReintegro() {
     });
     showToast(result.message);
     go('/');
+  });
+}
+
+function renderCartera() {
+  const user = getState().session;
+  const params = new URLSearchParams(location.search);
+  const q = (params.get('q') || '').toLowerCase();
+  const editId = params.get('edit') || '';
+  let clients = getActiveClients(user);
+  if (q) {
+    clients = clients.filter((c) =>
+      `${c.nombre} ${c.codigo} ${c.contacto} ${c.telefono}`.toLowerCase().includes(q)
+    );
+  }
+  const editing = editId ? clients.find((c) => c.id === editId) : null;
+
+  app.innerHTML = shell(
+    `
+    <div class="mb-4">
+      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Mi cartera</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900">${clients.length} cliente${clients.length === 1 ? '' : 's'}</h2>
+      <p class="mt-1 text-sm text-slate-500">Actualice los datos de contacto de sus clientes. Cada cambio queda registrado.</p>
+    </div>
+    <form id="form-buscar-cartera" class="mb-3 flex gap-2">
+      <input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Buscar cliente, código o contacto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500" />
+      <button class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase text-white">Buscar</button>
+    </form>
+    ${
+      editing
+        ? `<section class="mb-4 rounded-2xl border border-red-100 bg-red-50/40 p-5">
+      <h3 class="text-sm font-black text-slate-900">${escapeHtml(editing.nombre)}</h3>
+      <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(editing.codigo || '')} ${editing.pais ? `· ${escapeHtml(editing.pais)}` : ''}</p>
+      <form id="form-contacto" class="mt-3 grid gap-3 sm:grid-cols-2">
+        ${field('Contacto', 'contacto', { required: false, value: editing.contacto || '' })}
+        ${field('Teléfono', 'telefono', { required: false, type: 'tel', value: editing.telefono || '' })}
+        ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel', value: editing.telefono_fijo || '' })}
+        ${field('Correo contacto', 'correo_contacto', { required: false, type: 'email', value: editing.correo_contacto || '' })}
+        <div class="flex gap-2 sm:col-span-2">
+          <button class="flex-1 rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Guardar</button>
+          <button type="button" id="btn-cancel-contacto" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600">Cancelar</button>
+        </div>
+      </form>
+    </section>`
+        : ''
+    }
+    <div class="space-y-2">
+      ${
+        clients.length
+          ? clients
+              .map(
+                (c) => `
+        <div class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="min-w-0 flex-1">
+            <div class="truncate text-sm font-black text-slate-900">${escapeHtml(c.nombre)}</div>
+            <div class="mt-0.5 truncate text-xs text-slate-500">${escapeHtml(c.codigo || 'Sin código')}${c.contacto ? ` · ${escapeHtml(c.contacto)}` : ' · Sin contacto'}${c.telefono ? ` · ${escapeHtml(c.telefono)}` : ''}</div>
+          </div>
+          <button data-edit-contact="${c.id}" class="shrink-0 text-xs font-bold text-red-600 hover:underline">Editar</button>
+        </div>`
+              )
+              .join('')
+          : '<p class="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-400">Sin clientes en su cartera.</p>'
+      }
+    </div>
+    `,
+    { title: 'Mi cartera', showBack: true, backTo: '/' }
+  );
+  bindShell('/');
+  document.getElementById('form-buscar-cartera')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const value = new FormData(e.target).get('q') || '';
+    go(value ? `/cartera?q=${encodeURIComponent(value)}` : '/cartera');
+  });
+  document.querySelectorAll('[data-edit-contact]').forEach((btn) => {
+    btn.addEventListener('click', () => go(`/cartera?edit=${encodeURIComponent(btn.dataset.editContact)}`));
+  });
+  document.getElementById('btn-cancel-contacto')?.addEventListener('click', () => go('/cartera'));
+  document.getElementById('form-contacto')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const { changed } = updateClientContact(
+      editing.id,
+      {
+        contacto: fd.get('contacto'),
+        telefono: fd.get('telefono'),
+        telefono_fijo: fd.get('telefono_fijo'),
+        correo_contacto: fd.get('correo_contacto'),
+      },
+      getState().session
+    );
+    showToast(changed ? 'Contacto actualizado y registrado.' : 'Sin cambios.');
+    go('/cartera');
   });
 }
 
@@ -1159,6 +1262,7 @@ function renderAdminHub() {
       ${actionCard('/admin/solicitudes', 'Solicitudes', pending ? `${pending} pendiente${pending > 1 ? 's' : ''}.` : 'Aprobar o rechazar altas.', 'solicitudes')}
       ${actionCard('/admin/catalogos', 'Catálogos globales', 'Opciones de formularios.', 'catalogos')}
       ${actionCard('/admin/usuarios', 'Usuarios', 'Correos, claves y permisos.', 'usuarios')}
+      ${actionCard('/admin/historial', 'Historial de contactos', 'Cambios de contacto por ejecutivo.', 'solicitudes')}
     </div>
     `,
     { title: 'Administración' }
@@ -1509,6 +1613,93 @@ function renderAdminBaseDatos() {
     showToast('Cliente guardado.');
     render();
   });
+}
+
+function renderAdminHistorial() {
+  const state = getState();
+  const params = new URLSearchParams(location.search);
+  const filterVend = params.get('vendedor') || '';
+  const filterFecha = params.get('fecha') || '';
+  let changes = [...(state.contactChanges || [])].sort((a, b) =>
+    String(b.createdAt).localeCompare(String(a.createdAt))
+  );
+  if (filterVend) changes = changes.filter((x) => x.vendedorId === filterVend);
+  if (filterFecha) changes = changes.filter((x) => String(x.createdAt).slice(0, 10) === filterFecha);
+  const ejecutivos = getEjecutivos();
+  const sellerOpts = ejecutivos
+    .map(
+      (u) =>
+        `<option value="${escapeHtml(u.id)}" ${u.id === filterVend ? 'selected' : ''}>${escapeHtml(`${u.pais ? `[${u.pais}] ` : ''}${u.nombre}`)}</option>`
+    )
+    .join('');
+
+  app.innerHTML = shell(
+    `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Historial de contactos</h3>
+      <p class="mt-1 text-xs text-slate-500">Cambios de contacto hechos por cada ejecutivo en su cartera.</p>
+      <div class="mb-3 mt-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div class="flex-1">
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Ejecutivo</label>
+          <select id="filter-vendedor-hist" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+            <option value="">Todos</option>
+            ${sellerOpts}
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Fecha</label>
+          <input id="filter-fecha-hist" type="date" value="${escapeHtml(filterFecha)}" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+        </div>
+      </div>
+      <p class="mb-2 text-xs text-slate-500">${changes.length} cambio${changes.length === 1 ? '' : 's'}</p>
+      <div class="max-h-[28rem] overflow-y-auto rounded-xl border border-slate-100">
+        <table class="min-w-full text-left text-sm">
+          <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
+            <tr>
+              <th class="px-3 py-2">Fecha</th>
+              <th class="px-3 py-2">Ejecutivo</th>
+              <th class="px-3 py-2">Cliente</th>
+              <th class="px-3 py-2">Campo</th>
+              <th class="px-3 py-2">Anterior</th>
+              <th class="px-3 py-2">Nuevo</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              changes.length
+                ? changes
+                    .map(
+                      (x) => `
+              <tr class="border-t border-slate-100">
+                <td class="px-3 py-2 whitespace-nowrap text-slate-500">${escapeHtml(String(x.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
+                <td class="px-3 py-2 text-slate-600">${escapeHtml(x.vendedorNombre || '—')}</td>
+                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(x.clienteNombre || '—')}</td>
+                <td class="px-3 py-2 text-slate-600">${escapeHtml(x.campoLabel || x.campo || '—')}</td>
+                <td class="px-3 py-2 text-slate-500">${escapeHtml(x.anterior || '— (vacío)')}</td>
+                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(x.nuevo || '— (vacío)')}</td>
+              </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="6" class="px-3 py-4 text-slate-400">Sin cambios registrados.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+    `,
+    { title: 'Historial de contactos', showBack: true, backTo: '/admin' }
+  );
+  bindAdminSubShell();
+  const apply = () => {
+    const v = document.getElementById('filter-vendedor-hist')?.value || '';
+    const f = document.getElementById('filter-fecha-hist')?.value || '';
+    const q = new URLSearchParams();
+    if (v) q.set('vendedor', v);
+    if (f) q.set('fecha', f);
+    go(q.toString() ? `/admin/historial?${q.toString()}` : '/admin/historial');
+  };
+  document.getElementById('filter-vendedor-hist')?.addEventListener('change', apply);
+  document.getElementById('filter-fecha-hist')?.addEventListener('change', apply);
 }
 
 function renderAdminSolicitudes() {
@@ -1905,6 +2096,9 @@ function routeAdmin(path) {
     case '/admin/usuarios':
       renderAdminUsuarios();
       break;
+    case '/admin/historial':
+      renderAdminHistorial();
+      break;
     case '/admin':
       renderAdminHub();
       break;
@@ -1963,6 +2157,9 @@ function render() {
   switch (path) {
     case '/salida':
       renderSalida();
+      break;
+    case '/cartera':
+      renderCartera();
       break;
     case '/reintegro':
       renderReintegro();

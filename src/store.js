@@ -43,6 +43,7 @@ const DEFAULT_STATE = {
   catalogos: structuredClone(DEFAULT_CATALOGOS),
   clients: [],
   clientRequests: [],
+  contactChanges: [],
   notifications: [],
   salidas: [],
   users: [
@@ -184,6 +185,7 @@ function applyRemotePayload(payload, sessionOverride) {
     catalogos: normalizeCatalogos(payload.catalogos),
     clients: (Array.isArray(payload.clients) ? payload.clients : []).map(normalizeClient),
     clientRequests: Array.isArray(payload.clientRequests) ? payload.clientRequests : [],
+    contactChanges: Array.isArray(payload.contactChanges) ? payload.contactChanges : [],
     notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
     salidas: Array.isArray(payload.salidas) ? payload.salidas : [],
     users: (payload.users || []).map(normalizeUser),
@@ -215,6 +217,7 @@ function loadLocal() {
       users: (parsed.users?.length ? parsed.users : DEFAULT_STATE.users).map(normalizeUser),
       clients: (Array.isArray(parsed.clients) ? parsed.clients : []).map(normalizeClient),
       clientRequests: Array.isArray(parsed.clientRequests) ? parsed.clientRequests : [],
+      contactChanges: Array.isArray(parsed.contactChanges) ? parsed.contactChanges : [],
       notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
       salidas: Array.isArray(parsed.salidas) ? parsed.salidas : [],
       correo_ventas: parsed.correo_ventas || DEFAULT_STATE.correo_ventas,
@@ -252,6 +255,7 @@ function queueRemoteSync() {
         catalogos: state.catalogos,
         clients: state.clients,
         clientRequests: state.clientRequests,
+        contactChanges: state.contactChanges || [],
         notifications: state.notifications,
         salidas: state.salidas,
         users: state.users,
@@ -612,6 +616,52 @@ export function upsertClient(client) {
   else state.clients.push(next);
   save(state);
   return getState();
+}
+
+export const CONTACT_FIELDS = [
+  { key: 'contacto', label: 'Contacto' },
+  { key: 'telefono', label: 'Teléfono' },
+  { key: 'telefono_fijo', label: 'Teléfono fijo' },
+  { key: 'correo_contacto', label: 'Correo contacto' },
+];
+
+/** Edita contacto de un cliente propio y deja trazabilidad (anterior → nuevo). */
+export function updateClientContact(clientId, fields, user) {
+  const state = ensureMemory();
+  if (!Array.isArray(state.contactChanges)) state.contactChanges = [];
+  const idx = state.clients.findIndex((c) => c.id === clientId);
+  if (idx < 0 || !user) return { state: getState(), changed: 0 };
+  const client = state.clients[idx];
+  if (user.rol !== 'admin' && client.vendedorId !== user.id) {
+    return { state: getState(), changed: 0 };
+  }
+  const seller = state.users.find((u) => u.id === client.vendedorId);
+  let changed = 0;
+  for (const { key, label } of CONTACT_FIELDS) {
+    if (!(key in fields)) continue;
+    const before = String(client[key] || '').trim();
+    const after = String(fields[key] || '').trim();
+    if (before === after) continue;
+    state.contactChanges.push({
+      id: createId('chg'),
+      clientId: client.id,
+      codigo: client.codigo || '',
+      clienteNombre: client.nombre || '',
+      pais: client.pais || '',
+      campo: key,
+      campoLabel: label,
+      anterior: before,
+      nuevo: after,
+      vendedorId: client.vendedorId || user.id,
+      vendedorNombre: client.vendedorNombre || user.nombre || '',
+      correo_jefe: seller?.correo_jefe || '',
+      createdAt: new Date().toISOString(),
+    });
+    client[key] = after;
+    changed += 1;
+  }
+  if (changed) save(state);
+  return { state: getState(), changed };
 }
 
 export function deleteClient(id) {

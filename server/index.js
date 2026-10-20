@@ -169,6 +169,10 @@ async function migrate() {
     ALTER TABLE app_state
     ADD COLUMN IF NOT EXISTS salidas JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
+  await pool.query(`
+    ALTER TABLE app_state
+    ADD COLUMN IF NOT EXISTS contact_changes JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
 
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS transporte_default TEXT NOT NULL DEFAULT ''
@@ -249,6 +253,7 @@ async function getAppPayload(sessionUser = null) {
     catalogos: s.catalogos || DEFAULT_CATALOGOS,
     clients: s.clients || [],
     clientRequests: s.client_requests || [],
+    contactChanges: s.contact_changes || [],
     notifications: s.notifications || [],
     salidas: s.salidas || [],
     users,
@@ -366,6 +371,31 @@ app.get('/api/state', requireAuth, async (req, res) => {
   }
 });
 
+const CONTACT_KEYS = ['contacto', 'telefono', 'telefono_fijo', 'correo_contacto'];
+
+/** Vendedor: solo campos de contacto de sus propios clientes. */
+function mergeSellerClientContacts(currentClients, submitted, userId) {
+  if (!Array.isArray(submitted)) return currentClients;
+  const byId = new Map(submitted.map((c) => [c?.id, c]));
+  return (currentClients || []).map((c) => {
+    const next = byId.get(c.id);
+    if (!next || c.vendedorId !== userId) return c;
+    const merged = { ...c };
+    for (const k of CONTACT_KEYS) {
+      if (k in next) merged[k] = String(next[k] || '').trim();
+    }
+    return merged;
+  });
+}
+
+/** Vendedor: solo agrega cambios suyos, no borra historial. */
+function mergeSellerContactChanges(currentChanges, submitted, userId) {
+  if (!Array.isArray(submitted)) return currentChanges || [];
+  const known = new Set((currentChanges || []).map((x) => x.id));
+  const fresh = submitted.filter((x) => x?.id && !known.has(x.id) && x.vendedorId === userId);
+  return [...(currentChanges || []), ...fresh];
+}
+
 app.put('/api/state', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
@@ -386,7 +416,14 @@ app.put('/api/state', requireAuth, async (req, res) => {
         ? String(body.correo_ventas ?? current.correo_ventas).trim()
         : current.correo_ventas,
       catalogos: isAdmin ? body.catalogos || current.catalogos : current.catalogos,
-      clients: isAdmin ? body.clients || current.clients : current.clients,
+      clients: isAdmin
+        ? body.clients || current.clients
+        : mergeSellerClientContacts(current.clients, body.clients, req.user.id),
+      contactChanges: isAdmin
+        ? Array.isArray(body.contactChanges)
+          ? body.contactChanges
+          : current.contactChanges
+        : mergeSellerContactChanges(current.contactChanges, body.contactChanges, req.user.id),
       clientRequests: Array.isArray(body.clientRequests)
         ? body.clientRequests
         : current.clientRequests,
@@ -407,6 +444,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         client_requests = $7::jsonb,
         notifications = $8::jsonb,
         salidas = $9::jsonb,
+        contact_changes = $10::jsonb,
         updated_at = NOW()
        WHERE id = 1`,
       [
@@ -419,6 +457,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         JSON.stringify(next.clientRequests),
         JSON.stringify(next.notifications),
         JSON.stringify(next.salidas),
+        JSON.stringify(next.contactChanges || []),
       ]
     );
 
