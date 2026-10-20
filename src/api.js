@@ -62,6 +62,10 @@ export async function apiPutState(state) {
   return request('/api/state', { method: 'PUT', body: state });
 }
 
+export async function apiSendMake(body) {
+  return request('/api/make', { method: 'POST', body });
+}
+
 /** Detecta si hay API de servidor (Coolify / docker). */
 export async function apiAvailable() {
   try {

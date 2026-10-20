@@ -1,3 +1,2 @@
-/** Webhook Make — mismo para desarrollo y producción */
-export const DEFAULT_WEBHOOK_URL =
-  'https://hook.us2.make.com/ow654uexjzi3zpullwocow1p0fbdcwvs';
+/** En producción el envío a Make va por proxy del servidor (/api/make). */
+export const DEFAULT_WEBHOOK_URL = '';

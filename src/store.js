@@ -92,6 +92,7 @@ let remoteMode = false;
 let memory = null;
 let syncTimer = null;
 let syncing = false;
+let syncDirty = false;
 
 export function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -241,32 +242,43 @@ function saveLocal(state) {
 
 function queueRemoteSync() {
   if (!remoteMode || !getToken()) return;
+  syncDirty = true;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(async () => {
-    if (syncing) return;
-    syncing = true;
-    try {
-      const state = ensureMemory();
-      const payload = await apiPutState({
-        combustibleGlobal: state.combustibleGlobal,
-        catalogoClientesActivo: state.catalogoClientesActivo,
-        webhookUrl: state.webhookUrl,
-        correo_ventas: state.correo_ventas,
-        catalogos: state.catalogos,
-        clients: state.clients,
-        clientRequests: state.clientRequests,
-        contactChanges: state.contactChanges || [],
-        notifications: state.notifications,
-        salidas: state.salidas,
-        users: state.users,
-      });
-      applyRemotePayload(payload, state.session);
-    } catch (err) {
-      console.warn('Sync remoto falló', err);
-    } finally {
-      syncing = false;
+  syncTimer = setTimeout(runRemoteSync, 250);
+}
+
+async function runRemoteSync() {
+  if (syncing || !syncDirty) return;
+  syncing = true;
+  syncDirty = false;
+  try {
+    const state = ensureMemory();
+    const session = state.session;
+    const payload = await apiPutState({
+      combustibleGlobal: state.combustibleGlobal,
+      catalogoClientesActivo: state.catalogoClientesActivo,
+      webhookUrl: state.webhookUrl,
+      correo_ventas: state.correo_ventas,
+      catalogos: state.catalogos,
+      clients: state.clients,
+      clientRequests: state.clientRequests,
+      contactChanges: state.contactChanges || [],
+      notifications: state.notifications,
+      salidas: state.salidas,
+      users: state.users,
+    });
+    // Si hubo cambios durante el envío, no pisarlos con la respuesta.
+    if (!syncDirty) applyRemotePayload(payload, session);
+  } catch (err) {
+    console.warn('Sync remoto falló', err);
+    syncDirty = true;
+  } finally {
+    syncing = false;
+    if (syncDirty) {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(runRemoteSync, 800);
     }
-  }, 250);
+  }
 }
 
 function save(state) {
@@ -702,19 +714,27 @@ export function resolveClientRequest(id, decision, adminNote = '') {
 
   if (decision === 'aprobado') {
     const exists = state.clients.some(
-      (c) => c.nombre.toLowerCase() === req.nombre.toLowerCase() && c.activo !== false
+      (c) =>
+        c.nombre.toLowerCase() === req.nombre.toLowerCase() &&
+        c.vendedorId === req.vendedorId &&
+        c.activo !== false
     );
     if (!exists) {
-      state.clients.push({
-        id: createId('cli'),
-        nombre: req.nombre,
-        contacto: req.contacto,
-        telefono: req.telefono || '',
-        origen: 'aprobado',
-        activo: true,
-        createdAt: new Date().toISOString(),
-        solicitadoPor: req.vendedorNombre,
-      });
+      const seller = state.users.find((u) => u.id === req.vendedorId);
+      state.clients.push(
+        normalizeClient({
+          id: createId('cli'),
+          nombre: req.nombre,
+          contacto: req.contacto,
+          telefono: req.telefono || '',
+          pais: seller?.pais || '',
+          vendedorId: req.vendedorId,
+          vendedorNombre: req.vendedorNombre,
+          origen: 'aprobado',
+          activo: true,
+          createdAt: new Date().toISOString(),
+        })
+      );
     }
   }
 

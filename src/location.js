@@ -90,6 +90,16 @@ export function getGps(opts = {}) {
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const acc = pos.coords.accuracy;
+        if (acc != null && acc > 100) {
+          reject(
+            new LocationError(
+              `Precisión GPS insuficiente (${Math.round(acc)} m). Salga a un lugar abierto e intente de nuevo.`,
+              'unavailable'
+            )
+          );
+          return;
+        }
         lastFix = {
           latitud: String(pos.coords.latitude),
           longitud: String(pos.coords.longitude),

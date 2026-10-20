@@ -241,23 +241,62 @@ async function getUsers() {
   return rows.map(publicUser);
 }
 
-async function getAppPayload(sessionUser = null) {
+async function getAppPayload(sessionUser = null, full = false) {
   const { rows } = await pool.query('SELECT * FROM app_state WHERE id = 1');
   const s = rows[0];
-  const users = await getUsers();
+  const allUsers = await getUsers();
+  const jefeCorreos = new Set(
+    allUsers.map((u) => String(u.correo_jefe || '').toLowerCase()).filter(Boolean)
+  );
+  const users = allUsers.map((u) => ({
+    ...u,
+    es_jefe: jefeCorreos.has(String(u.correo || '').toLowerCase()),
+  }));
+
+  let clients = s.clients || [];
+  let clientRequests = s.client_requests || [];
+  let contactChanges = s.contact_changes || [];
+  let notifications = s.notifications || [];
+  let salidas = s.salidas || [];
+  let visibleUsers = users;
+  let webhookUrl = s.webhook_url || DEFAULT_WEBHOOK_URL;
+
+  if (!full && sessionUser && sessionUser.rol !== 'admin') {
+    const me = users.find((u) => u.id === sessionUser.id);
+    const teamIds = new Set(
+      users
+        .filter(
+          (u) =>
+            me?.correo &&
+            String(u.correo_jefe || '').toLowerCase() === String(me.correo).toLowerCase()
+        )
+        .map((u) => u.id)
+    );
+    teamIds.add(sessionUser.id);
+    clients = clients.filter((c) => c.vendedorId === sessionUser.id);
+    clientRequests = clientRequests.filter((r) => r.vendedorId === sessionUser.id);
+    contactChanges = contactChanges.filter((x) => teamIds.has(x.vendedorId));
+    notifications = notifications.filter((n) => n.userId === sessionUser.id);
+    salidas = salidas.filter((x) => x.vendedorId === sessionUser.id);
+    visibleUsers = me ? [me] : [];
+    webhookUrl = '';
+  }
+
   return {
     combustibleGlobal: s.combustible_global,
     catalogoClientesActivo: s.catalogo_clientes_activo,
-    webhookUrl: s.webhook_url || DEFAULT_WEBHOOK_URL,
+    webhookUrl,
     correo_ventas: s.correo_ventas,
     catalogos: s.catalogos || DEFAULT_CATALOGOS,
-    clients: s.clients || [],
-    clientRequests: s.client_requests || [],
-    contactChanges: s.contact_changes || [],
-    notifications: s.notifications || [],
-    salidas: s.salidas || [],
-    users,
-    session: sessionUser ? publicUser(sessionUser) : null,
+    clients,
+    clientRequests,
+    contactChanges,
+    notifications,
+    salidas,
+    users: visibleUsers,
+    session: sessionUser
+      ? users.find((u) => u.id === sessionUser.id) || publicUser(sessionUser)
+      : null,
   };
 }
 
@@ -388,20 +427,96 @@ function mergeSellerClientContacts(currentClients, submitted, userId) {
   });
 }
 
-/** Vendedor: solo agrega cambios suyos, no borra historial. */
-function mergeSellerContactChanges(currentChanges, submitted, userId) {
+/** Vendedor: salidas propias (crear / marcar visitada), no toca ajenas. */
+function mergeSellerSalidas(currentSalidas, submitted, userId) {
+  if (!Array.isArray(submitted)) return currentSalidas || [];
+  const byId = new Map((currentSalidas || []).map((x) => [x.id, x]));
+  for (const item of submitted) {
+    if (!item?.id) continue;
+    const existing = byId.get(item.id);
+    if (existing) {
+      if (existing.vendedorId === userId) byId.set(item.id, { ...existing, ...item, vendedorId: userId });
+    } else if (item.vendedorId === userId) {
+      byId.set(item.id, item);
+    }
+  }
+  return [...byId.values()];
+}
+
+/** Vendedor: crea solicitudes propias en pendiente; no resuelve ni toca ajenas. */
+function mergeSellerClientRequests(currentReqs, submitted, userId) {
+  if (!Array.isArray(submitted)) return currentReqs || [];
+  const byId = new Map((currentReqs || []).map((x) => [x.id, x]));
+  for (const item of submitted) {
+    if (!item?.id || byId.has(item.id)) continue;
+    if (item.vendedorId === userId) byId.set(item.id, { ...item, estado: 'pendiente' });
+  }
+  return [...byId.values()];
+}
+
+/** Vendedor: solo marca leídas sus notificaciones; no crea ni borra. */
+function mergeSellerNotifications(currentNotes, submitted, userId) {
+  if (!Array.isArray(submitted)) return currentNotes || [];
+  const byId = new Map(submitted.map((x) => [x?.id, x]));
+  return (currentNotes || []).map((n) => {
+    if (n.userId !== userId) return n;
+    const next = byId.get(n.id);
+    return next ? { ...n, leida: Boolean(next.leida) } : n;
+  });
+}
+
+/** Vendedor: solo agrega cambios suyos sobre clientes propios, no borra historial. */
+function mergeSellerContactChanges(currentChanges, submitted, userId, currentClients = []) {
   if (!Array.isArray(submitted)) return currentChanges || [];
   const known = new Set((currentChanges || []).map((x) => x.id));
-  const fresh = submitted.filter((x) => x?.id && !known.has(x.id) && x.vendedorId === userId);
+  const ownClients = new Set(
+    (currentClients || []).filter((c) => c.vendedorId === userId).map((c) => c.id)
+  );
+  const fresh = submitted.filter(
+    (x) => x?.id && !known.has(x.id) && x.vendedorId === userId && ownClients.has(x.clientId)
+  );
   return [...(currentChanges || []), ...fresh];
 }
+
+const FORMULARIOS = new Set([
+  'registro_salidas',
+  'reportes_visitas',
+  'solicitud_reintegro',
+  'solicitud_cliente',
+]);
+
+/** Reenvía el payload a Make desde el servidor (URL nunca llega al navegador). */
+app.post('/api/make', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!FORMULARIOS.has(String(body.formulario || ''))) {
+      return res.status(400).json({ error: 'Formulario no válido' });
+    }
+    if (body.formulario === 'solicitud_reintegro' && body.combustible_activo !== true) {
+      return res.status(403).json({ error: 'Reintegro de combustible desactivado' });
+    }
+    const { rows } = await pool.query('SELECT webhook_url FROM app_state WHERE id = 1');
+    const url = String(rows[0]?.webhook_url || DEFAULT_WEBHOOK_URL).trim();
+    if (!url) return res.status(503).json({ error: 'Webhook no configurado' });
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!upstream.ok) return res.status(502).json({ error: `Make respondió ${upstream.status}` });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(502).json({ error: 'No se pudo enviar a Make' });
+  }
+});
 
 app.put('/api/state', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
     const isAdmin = req.user.rol === 'admin';
 
-    const current = await getAppPayload(req.user);
+    const current = await getAppPayload(req.user, true);
     const next = {
       combustibleGlobal: isAdmin
         ? Boolean(body.combustibleGlobal ?? current.combustibleGlobal)
@@ -423,14 +538,27 @@ app.put('/api/state', requireAuth, async (req, res) => {
         ? Array.isArray(body.contactChanges)
           ? body.contactChanges
           : current.contactChanges
-        : mergeSellerContactChanges(current.contactChanges, body.contactChanges, req.user.id),
-      clientRequests: Array.isArray(body.clientRequests)
-        ? body.clientRequests
-        : current.clientRequests,
-      notifications: Array.isArray(body.notifications)
-        ? body.notifications
-        : current.notifications,
-      salidas: Array.isArray(body.salidas) ? body.salidas : current.salidas,
+        : mergeSellerContactChanges(
+            current.contactChanges,
+            body.contactChanges,
+            req.user.id,
+            current.clients
+          ),
+      clientRequests: isAdmin
+        ? Array.isArray(body.clientRequests)
+          ? body.clientRequests
+          : current.clientRequests
+        : mergeSellerClientRequests(current.clientRequests, body.clientRequests, req.user.id),
+      notifications: isAdmin
+        ? Array.isArray(body.notifications)
+          ? body.notifications
+          : current.notifications
+        : mergeSellerNotifications(current.notifications, body.notifications, req.user.id),
+      salidas: isAdmin
+        ? Array.isArray(body.salidas)
+          ? body.salidas
+          : current.salidas
+        : mergeSellerSalidas(current.salidas, body.salidas, req.user.id),
     };
 
     await pool.query(

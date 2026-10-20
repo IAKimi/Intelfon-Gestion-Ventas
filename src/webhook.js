@@ -1,4 +1,5 @@
-import { getState, resolveCombustible } from './store.js';
+import { getState, isRemoteMode, resolveCombustible } from './store.js';
+import { apiSendMake, getToken } from './api.js';
 import { DEFAULT_WEBHOOK_URL } from './config.js';
 
 export { DEFAULT_WEBHOOK_URL };
@@ -75,16 +76,39 @@ function emptyEnvelope() {
 
 export { getGps } from './location.js';
 
+/** Comprime la foto (máx. 1280 px, JPEG 0.72) antes de enviarla a Make. */
 export function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     if (!file) {
       resolve(null);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
-    reader.readAsDataURL(file);
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      } catch {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+        reader.readAsDataURL(file);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+      reader.readAsDataURL(file);
+    };
+    img.src = url;
   });
 }
 
@@ -132,11 +156,14 @@ function buildBody(payload) {
 
 export async function sendToMake(payload) {
   const state = getState();
-  const webhookUrl = (state.webhookUrl || DEFAULT_WEBHOOK_URL).trim();
   const body = buildBody(payload);
 
-  console.info('[RED] Payload → Make', body);
+  if (isRemoteMode() && getToken()) {
+    await apiSendMake(body);
+    return { ok: true, demo: false, message: 'Registro enviado correctamente a Make.', body };
+  }
 
+  const webhookUrl = (state.webhookUrl || DEFAULT_WEBHOOK_URL).trim();
   if (!webhookUrl) {
     return {
       ok: true,

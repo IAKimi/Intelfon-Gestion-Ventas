@@ -327,7 +327,6 @@ function renderSellerLogin() {
           <input name="password" type="password" required autocomplete="current-password" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="••••••••" />
         </div>
         <button class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Ingresar</button>
-        <p class="text-center text-[11px] text-slate-400">Acceso: <span class="font-semibold">vendedor@red.com.sv</span></p>
       </form>
     </div>
     `,
@@ -377,7 +376,6 @@ function renderAdminLogin() {
           <input name="password" type="password" required autocomplete="current-password" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="••••••••" />
         </div>
         <button class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg hover:bg-red-700">Ingresar</button>
-        <p class="text-center text-[11px] text-slate-400">Acceso: <span class="font-semibold">admin@red.com.sv</span></p>
       </form>
     </div>
     `,
@@ -577,6 +575,7 @@ function renderHome() {
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
+      ${user.es_jefe ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
       ${
         isCatalogoClientesActivo()
@@ -1382,7 +1381,7 @@ function renderAdminBaseDatos() {
         <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
       </div>
       <p id="import-status" class="mt-2 text-xs text-slate-500"></p>
-      <p class="mt-3 text-[11px] text-slate-400">Clave temporal de stubs: <strong>Cambiar123!</strong> — luego asigne correos en Usuarios.</p>
+      <p class="mt-3 text-[11px] text-slate-400">Los ejecutivos nuevos nacen con clave temporal: asigne correos y claves en Usuarios.</p>
     </section>`
         : ''
     }
@@ -1615,8 +1614,9 @@ function renderAdminBaseDatos() {
   });
 }
 
-function renderAdminHistorial() {
+function renderAdminHistorial(basePath = '/admin/historial') {
   const state = getState();
+  const isAdminView = basePath.startsWith('/admin');
   const params = new URLSearchParams(location.search);
   const filterVend = params.get('vendedor') || '';
   const filterFecha = params.get('fecha') || '';
@@ -1625,7 +1625,16 @@ function renderAdminHistorial() {
   );
   if (filterVend) changes = changes.filter((x) => x.vendedorId === filterVend);
   if (filterFecha) changes = changes.filter((x) => String(x.createdAt).slice(0, 10) === filterFecha);
-  const ejecutivos = getEjecutivos();
+  let ejecutivos = getEjecutivos();
+  if (!ejecutivos.length) {
+    const seen = new Map();
+    for (const x of state.contactChanges || []) {
+      if (x.vendedorId && !seen.has(x.vendedorId)) {
+        seen.set(x.vendedorId, { id: x.vendedorId, nombre: x.vendedorNombre || '', pais: x.pais || '' });
+      }
+    }
+    ejecutivos = [...seen.values()];
+  }
   const sellerOpts = ejecutivos
     .map(
       (u) =>
@@ -1687,16 +1696,17 @@ function renderAdminHistorial() {
       </div>
     </section>
     `,
-    { title: 'Historial de contactos', showBack: true, backTo: '/admin' }
+    { title: 'Historial de contactos', showBack: true, backTo: isAdminView ? '/admin' : '/' }
   );
-  bindAdminSubShell();
+  if (isAdminView) bindAdminSubShell();
+  else bindShell('/');
   const apply = () => {
     const v = document.getElementById('filter-vendedor-hist')?.value || '';
     const f = document.getElementById('filter-fecha-hist')?.value || '';
     const q = new URLSearchParams();
     if (v) q.set('vendedor', v);
     if (f) q.set('fecha', f);
-    go(q.toString() ? `/admin/historial?${q.toString()}` : '/admin/historial');
+    go(q.toString() ? `${basePath}?${q.toString()}` : basePath);
   };
   document.getElementById('filter-vendedor-hist')?.addEventListener('change', apply);
   document.getElementById('filter-fecha-hist')?.addEventListener('change', apply);
@@ -1737,19 +1747,27 @@ function renderAdminSolicitudes() {
   bindAdminSubShell();
   document.querySelectorAll('[data-approve]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      const { request } = resolveClientRequest(btn.dataset.approve, 'aprobado');
-      if (!request) return;
-      await sendToMake({
-        formulario: 'solicitud_cliente',
-        request_id: request.id,
-        nombre_cliente: request.nombre,
-        contacto_cliente: request.contacto,
-        telefono_cliente: request.telefono || '',
-        correo_vendedor: request.vendedorCorreo,
-        correo_ventas: getState().correo_ventas,
-        accion: 'aprobado',
-        vendedor: request.vendedorNombre,
-      });
+      const req = getState().clientRequests.find((r) => r.id === btn.dataset.approve);
+      if (!req || req.estado !== 'pendiente') return;
+      btn.disabled = true;
+      try {
+        await sendToMake({
+          formulario: 'solicitud_cliente',
+          request_id: req.id,
+          nombre_cliente: req.nombre,
+          contacto_cliente: req.contacto,
+          telefono_cliente: req.telefono || '',
+          correo_vendedor: req.vendedorCorreo,
+          correo_ventas: getState().correo_ventas,
+          accion: 'aprobado',
+          vendedor: req.vendedorNombre,
+        });
+      } catch {
+        showToast('Make no respondió. La solicitud sigue pendiente.', 'err');
+        btn.disabled = false;
+        return;
+      }
+      resolveClientRequest(req.id, 'aprobado');
       showToast('Cliente aprobado y notificado.');
       render();
     });
@@ -1757,20 +1775,28 @@ function renderAdminSolicitudes() {
   document.querySelectorAll('[data-reject]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const motivo = prompt('Motivo del rechazo (opcional):') || '';
-      const { request } = resolveClientRequest(btn.dataset.reject, 'rechazado', motivo);
-      if (!request) return;
-      await sendToMake({
-        formulario: 'solicitud_cliente',
-        request_id: request.id,
-        nombre_cliente: request.nombre,
-        contacto_cliente: request.contacto,
-        telefono_cliente: request.telefono || '',
-        correo_vendedor: request.vendedorCorreo,
-        correo_ventas: getState().correo_ventas,
-        accion: 'rechazado',
-        motivo,
-        vendedor: request.vendedorNombre,
-      });
+      const req = getState().clientRequests.find((r) => r.id === btn.dataset.reject);
+      if (!req || req.estado !== 'pendiente') return;
+      btn.disabled = true;
+      try {
+        await sendToMake({
+          formulario: 'solicitud_cliente',
+          request_id: req.id,
+          nombre_cliente: req.nombre,
+          contacto_cliente: req.contacto,
+          telefono_cliente: req.telefono || '',
+          correo_vendedor: req.vendedorCorreo,
+          correo_ventas: getState().correo_ventas,
+          accion: 'rechazado',
+          motivo,
+          vendedor: req.vendedorNombre,
+        });
+      } catch {
+        showToast('Make no respondió. La solicitud sigue pendiente.', 'err');
+        btn.disabled = false;
+        return;
+      }
+      resolveClientRequest(req.id, 'rechazado', motivo);
       showToast('Solicitud rechazada y notificada.');
       render();
     });
@@ -2160,6 +2186,13 @@ function render() {
       break;
     case '/cartera':
       renderCartera();
+      break;
+    case '/historial':
+      if (!user.es_jefe) {
+        go('/', { replace: true, animate: false });
+        return;
+      }
+      renderAdminHistorial('/historial');
       break;
     case '/reintegro':
       renderReintegro();
