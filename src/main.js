@@ -1330,10 +1330,43 @@ function renderAdminConfig() {
 function renderAdminBaseDatos() {
   const state = getState();
   const params = new URLSearchParams(location.search);
-  const view = params.get('view') || 'ejecutivos';
+  const view = params.get('view') || '';
   const filterVend = params.get('vendedor') || '';
   const filterPais = params.get('pais') || '';
-  const ejecutivos = getEjecutivos();
+
+  if (!view) {
+    app.innerHTML = shell(
+      `
+    <div class="mb-4">
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos</h3>
+      <p class="mt-1 text-xs text-slate-500">Seleccione qué desea consultar.</p>
+    </div>
+    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4">
+      ${actionCard('/admin/base-datos?view=ejecutivos', 'Ejecutivos', 'Vendedores por país y cartera.', 'usuarios')}
+      ${actionCard('/admin/base-datos?view=clientes', 'Clientes', 'Cartera completa SV / GT.', 'cliente')}
+      ${actionCard('/admin/base-datos?view=importar', 'Importar', 'Cargar Excel de cartera.', 'carga')}
+    </div>
+    `,
+      { title: 'Base de datos', showBack: true, backTo: '/admin' }
+    );
+    bindAdminSubShell();
+    return;
+  }
+
+  let ejecutivos = getEjecutivos();
+  const ePais = params.get('epais') || '';
+  const eOrden = params.get('orden') || 'nombre';
+  const eQ = (params.get('eq') || '').toLowerCase();
+  ejecutivos = ejecutivos.map((u) => ({ ...u, _clientes: getClientsByVendedor(u.id).length }));
+  if (ePais) ejecutivos = ejecutivos.filter((u) => u.pais === ePais);
+  if (eQ) {
+    ejecutivos = ejecutivos.filter((u) =>
+      `${u.nombre} ${u.usuario} ${u.correo}`.toLowerCase().includes(eQ)
+    );
+  }
+  if (eOrden === 'mas') ejecutivos.sort((a, b) => b._clientes - a._clientes);
+  else if (eOrden === 'menos') ejecutivos.sort((a, b) => a._clientes - b._clientes);
+  else ejecutivos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   let clients = state.clients.filter((c) => c.activo !== false);
   if (filterVend) clients = clients.filter((c) => c.vendedorId === filterVend);
   if (filterPais) clients = clients.filter((c) => c.pais === filterPais);
@@ -1361,13 +1394,9 @@ function renderAdminBaseDatos() {
   app.innerHTML = shell(
     `
     <div class="mb-4">
-      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos</h3>
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos · ${view === 'ejecutivos' ? 'Ejecutivos' : view === 'clientes' ? 'Clientes' : 'Importar'}</h3>
       <p class="mt-1 text-xs text-slate-500">Ejecutivos, carteras e importación masiva (SV / GT).</p>
-      <div class="mt-3 flex flex-wrap gap-2">
-        ${tab('ejecutivos', 'Ejecutivos')}
-        ${tab('clientes', 'Clientes')}
-        ${tab('importar', 'Importar')}
-      </div>
+      <button data-nav="/admin/base-datos" class="mt-2 text-xs font-bold text-red-600 hover:underline">← Cambiar sección</button>
     </div>
 
     ${
@@ -1390,6 +1419,29 @@ function renderAdminBaseDatos() {
       view === 'ejecutivos'
         ? `
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div class="flex-1">
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Buscar</label>
+          <input id="filter-eq" value="${escapeHtml(params.get('eq') || '')}" placeholder="Nombre, usuario o correo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+        </div>
+        <div>
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">País</label>
+          <select id="filter-epais" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+            <option value="">Todos</option>
+            <option value="SV" ${ePais === 'SV' ? 'selected' : ''}>El Salvador</option>
+            <option value="GT" ${ePais === 'GT' ? 'selected' : ''}>Guatemala</option>
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Orden</label>
+          <select id="filter-orden" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+            <option value="nombre" ${eOrden === 'nombre' ? 'selected' : ''}>Por nombre</option>
+            <option value="mas" ${eOrden === 'mas' ? 'selected' : ''}>Más clientes</option>
+            <option value="menos" ${eOrden === 'menos' ? 'selected' : ''}>Menos clientes</option>
+          </select>
+        </div>
+      </div>
+      <p class="mb-2 text-xs text-slate-500">${ejecutivos.length} ejecutivo${ejecutivos.length === 1 ? '' : 's'}</p>
       <div class="max-h-[32rem] overflow-y-auto">
         <table class="min-w-full text-left text-sm">
           <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
@@ -1406,7 +1458,7 @@ function renderAdminBaseDatos() {
               ejecutivos.length
                 ? ejecutivos
                     .map((u) => {
-                      const n = getClientsByVendedor(u.id).length;
+                      const n = u._clientes;
                       return `
               <tr class="border-t border-slate-100">
                 <td class="px-3 py-2 font-bold text-slate-700">${escapeHtml(u.pais || '—')}</td>
@@ -1555,6 +1607,20 @@ function renderAdminBaseDatos() {
   };
   document.getElementById('filter-vendedor')?.addEventListener('change', applyFilters);
   document.getElementById('filter-pais')?.addEventListener('change', applyFilters);
+
+  const applyEjecutivoFilters = () => {
+    const q = new URLSearchParams({ view: 'ejecutivos' });
+    const buscar = document.getElementById('filter-eq')?.value.trim() || '';
+    const pais = document.getElementById('filter-epais')?.value || '';
+    const orden = document.getElementById('filter-orden')?.value || 'nombre';
+    if (buscar) q.set('eq', buscar);
+    if (pais) q.set('epais', pais);
+    if (orden !== 'nombre') q.set('orden', orden);
+    go(`/admin/base-datos?${q.toString()}`);
+  };
+  document.getElementById('filter-epais')?.addEventListener('change', applyEjecutivoFilters);
+  document.getElementById('filter-orden')?.addEventListener('change', applyEjecutivoFilters);
+  document.getElementById('filter-eq')?.addEventListener('change', applyEjecutivoFilters);
 
   const editor = document.getElementById('client-editor');
   const form = document.getElementById('form-client');
@@ -1888,12 +1954,20 @@ function renderAdminCatalogos() {
 
 function renderAdminUsuarios() {
   const state = getState();
-  const usersRows = state.users
+  const params = new URLSearchParams(location.search);
+  const paisSel = params.get('pais') || 'SV';
+  const countPais = (p) => state.users.filter((u) => (u.pais || '') === p).length;
+  const sinPais = state.users.filter((u) => !u.pais).length;
+  const visibleUsers =
+    paisSel === 'XX' ? state.users.filter((u) => !u.pais) : state.users.filter((u) => u.pais === paisSel);
+  const usersRows = visibleUsers
     .map(
       (u) => `
       <tr class="border-t border-slate-100">
         <td class="px-3 py-3 text-sm font-semibold text-slate-900">${escapeHtml(u.usuario)}</td>
         <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.nombre)}</td>
+        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo || '—')}</td>
+        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo_jefe || '—')}</td>
         <td class="px-3 py-3 text-sm capitalize">${escapeHtml(u.rol)}</td>
         <td class="px-3 py-3">
           ${iosSwitch('combustible_row', u.combustible_activo, {
@@ -1923,18 +1997,32 @@ function renderAdminUsuarios() {
           </div>
           <button id="btn-new-user" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Nuevo</button>
         </div>
+        <div class="mb-4 grid grid-cols-2 gap-3">
+          <button data-nav="/admin/usuarios?pais=GT" class="card-lift rounded-2xl border ${paisSel === 'GT' ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'} p-4 text-left shadow-sm">
+            <div class="text-sm font-black text-slate-900">Guatemala</div>
+            <p class="mt-1 text-xs text-slate-500">${countPais('GT')} usuario${countPais('GT') === 1 ? '' : 's'}</p>
+          </button>
+          <button data-nav="/admin/usuarios?pais=SV" class="card-lift rounded-2xl border ${paisSel === 'SV' ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'} p-4 text-left shadow-sm">
+            <div class="text-sm font-black text-slate-900">El Salvador</div>
+            <p class="mt-1 text-xs text-slate-500">${countPais('SV')} usuario${countPais('SV') === 1 ? '' : 's'}</p>
+          </button>
+        </div>
+        ${sinPais ? `<button data-nav="/admin/usuarios?pais=XX" class="mb-3 text-xs font-bold ${paisSel === 'XX' ? 'text-red-600' : 'text-slate-400'} hover:underline">${sinPais} usuario${sinPais === 1 ? '' : 's'} sin país asignado</button>` : ''}
+        <p class="mb-2 text-xs font-semibold text-slate-700">${paisSel === 'GT' ? 'Guatemala' : paisSel === 'SV' ? 'El Salvador' : 'Sin país'} · ${visibleUsers.length} usuario${visibleUsers.length === 1 ? '' : 's'}</p>
         <div class="overflow-x-auto">
           <table class="min-w-full text-left">
             <thead class="text-xs uppercase tracking-wider text-slate-400">
               <tr>
                 <th class="px-3 py-2">Usuario</th>
                 <th class="px-3 py-2">Nombre</th>
+                <th class="px-3 py-2">Correo</th>
+                <th class="px-3 py-2">Correo jefe</th>
                 <th class="px-3 py-2">Rol</th>
                 <th class="px-3 py-2">Combustible</th>
                 <th class="px-3 py-2"></th>
               </tr>
             </thead>
-            <tbody>${usersRows}</tbody>
+            <tbody>${usersRows || '<tr><td colspan="7" class="px-3 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
           </table>
         </div>
       </section>
