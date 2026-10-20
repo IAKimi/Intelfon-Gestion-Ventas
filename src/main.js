@@ -1965,7 +1965,7 @@ function renderAdminUsuarios() {
       (u) => `
       <tr class="border-t border-slate-100">
         <td class="px-3 py-3 text-sm font-semibold text-slate-900">${escapeHtml(u.usuario)}</td>
-        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.nombre)}</td>
+        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.nombre)} <span class="ml-1 rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span></td>
         <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo || '—')}</td>
         <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo_jefe || '—')}</td>
         <td class="px-3 py-3 text-sm capitalize">${escapeHtml(u.rol)}</td>
@@ -1976,6 +1976,12 @@ function renderAdminUsuarios() {
         </td>
         <td class="px-3 py-3 text-right whitespace-nowrap">
           <button data-edit="${u.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
+          <button data-reset="${u.id}" class="ml-2 text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Restablecer clave</button>
+          ${
+            u.rol === 'vendedor'
+              ? `<button data-cartera="${u.id}" class="ml-2 text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Cartera</button>`
+              : ''
+          }
           ${
             u.usuario !== 'admin'
               ? `<button data-del="${u.id}" class="ml-2 text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>`
@@ -2047,6 +2053,10 @@ function renderAdminUsuarios() {
             type: 'select',
             value: `<option value="vendedor">Vendedor</option><option value="admin">Admin</option>`,
           })}
+          <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:col-span-2">
+            <span class="text-sm font-bold text-slate-800">Usuario activo (puede iniciar sesión)</span>
+            ${iosSwitch('activo', true)}
+          </div>
           <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:col-span-2">
             <span class="text-sm font-bold text-slate-800">Combustible activo (si el global está OFF)</span>
             ${iosSwitch('combustible_activo', true)}
@@ -2131,6 +2141,7 @@ function renderAdminUsuarios() {
     formUser.correo.value = user?.correo || '';
     formUser.correo_jefe.value = user?.correo_jefe || '';
     formUser.rol.value = user?.rol || 'vendedor';
+    formUser.activo.checked = user?.activo ?? true;
     formUser.combustible_activo.checked = user?.combustible_activo ?? true;
     paintUserOptions(user);
     editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2152,6 +2163,27 @@ function renderAdminUsuarios() {
       deleteUser(btn.dataset.del);
       showToast('Usuario eliminado.');
       render();
+    });
+  });
+
+  document.querySelectorAll('[data-reset]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const user = getState().users.find((u) => u.id === btn.dataset.reset);
+      if (!user) return;
+      const local = String(user.correo || user.usuario || '')
+        .split('@')[0]
+        .toLowerCase();
+      const nueva = `${local}12345`;
+      if (!confirm(`¿Restablecer la contraseña de ${user.nombre} a ${nueva}?`)) return;
+      upsertUser({ ...user, password: nueva });
+      showToast(`Clave de ${user.nombre}: ${nueva}`);
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-cartera]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      go(`/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(btn.dataset.cartera)}`);
     });
   });
 
@@ -2182,7 +2214,7 @@ function renderAdminUsuarios() {
       correo_jefe: String(fd.get('correo_jefe') || '').trim(),
       rol: fd.get('rol'),
       combustible_activo: fd.get('combustible_activo') === 'on',
-      activo: true,
+      activo: fd.get('activo') === 'on',
       transporte_default: String(fd.get('transporte_default') || '').trim(),
       pago_combustible_default: String(fd.get('pago_combustible_default') || '').trim(),
       ...picks,
