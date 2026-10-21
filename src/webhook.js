@@ -160,7 +160,7 @@ export async function sendToMake(payload) {
 
   if (isRemoteMode() && getToken()) {
     await apiSendMake(body);
-    return { ok: true, demo: false, message: 'Registro enviado correctamente a Make.', body };
+    return { ok: true, demo: false, message: 'Registro enviado correctamente.', body };
   }
 
   const webhookUrl = (state.webhookUrl || DEFAULT_WEBHOOK_URL).trim();
@@ -180,8 +180,8 @@ export async function sendToMake(payload) {
   });
 
   if (!res.ok) {
-    throw new Error(`Make respondió con error (${res.status}).`);
+    throw new Error('No se pudo completar la solicitud. Inténtelo nuevamente.');
   }
 
-  return { ok: true, demo: false, message: 'Registro enviado correctamente a Make.', body };
+  return { ok: true, demo: false, message: 'Registro enviado correctamente.', body };
 }

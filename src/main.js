@@ -1829,7 +1829,7 @@ function renderAdminSolicitudes() {
           vendedor: req.vendedorNombre,
         });
       } catch {
-        showToast('Make no respondió. La solicitud sigue pendiente.', 'err');
+        showToast('No se pudo completar la solicitud. La solicitud sigue pendiente.', 'err');
         btn.disabled = false;
         return;
       }
@@ -1858,7 +1858,7 @@ function renderAdminSolicitudes() {
           vendedor: req.vendedorNombre,
         });
       } catch {
-        showToast('Make no respondió. La solicitud sigue pendiente.', 'err');
+        showToast('No se pudo completar la solicitud. La solicitud sigue pendiente.', 'err');
         btn.disabled = false;
         return;
       }

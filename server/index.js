@@ -503,11 +503,11 @@ app.post('/api/make', requireAuth, async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!upstream.ok) return res.status(502).json({ error: `Make respondió ${upstream.status}` });
+    if (!upstream.ok) return res.status(502).json({ error: 'No se pudo completar la solicitud. Inténtelo nuevamente.' });
     return res.json({ ok: true });
   } catch (err) {
     console.error(err);
-    return res.status(502).json({ error: 'No se pudo enviar a Make' });
+    return res.status(502).json({ error: 'No se pudo completar la solicitud. Inténtelo nuevamente.' });
   }
 });
 
