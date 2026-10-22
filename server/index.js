@@ -426,19 +426,26 @@ app.get('/api/state', requireAuth, async (req, res) => {
 
 const CONTACT_KEYS = ['contacto', 'telefono', 'telefono_fijo', 'correo_contacto'];
 
-/** Vendedor: solo campos de contacto de sus propios clientes. */
+/** Vendedor: contacto de sus clientes + alta libre de prospectos propios. */
 function mergeSellerClientContacts(currentClients, submitted, userId) {
   if (!Array.isArray(submitted)) return currentClients;
   const byId = new Map(submitted.map((c) => [c?.id, c]));
-  return (currentClients || []).map((c) => {
+  const merged = (currentClients || []).map((c) => {
     const next = byId.get(c.id);
     if (!next || c.vendedorId !== userId) return c;
-    const merged = { ...c };
+    const out = { ...c };
     for (const k of CONTACT_KEYS) {
-      if (k in next) merged[k] = String(next[k] || '').trim();
+      if (k in next) out[k] = String(next[k] || '').trim();
     }
-    return merged;
+    return out;
   });
+  const known = new Set(merged.map((c) => c.id));
+  for (const c of submitted) {
+    if (c?.id && !known.has(c.id) && c.vendedorId === userId && c.tipo === 'prospecto') {
+      merged.push(c);
+    }
+  }
+  return merged;
 }
 
 /** Vendedor: salidas propias (crear / marcar visitada), no toca ajenas. */

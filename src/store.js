@@ -152,6 +152,9 @@ export function normalizeClient(c) {
     pais: pais === 'GT' || pais === 'SV' ? pais : '',
     vendedorId: c.vendedorId || '',
     vendedorNombre: String(c.vendedorNombre || '').trim(),
+    tipo: c.tipo === 'prospecto' ? 'prospecto' : 'cliente',
+    ubicacion: String(c.ubicacion || '').trim(),
+    notas: String(c.notas || '').trim(),
     origen: c.origen || 'manual',
     activo: c.activo !== false,
     createdAt: c.createdAt || new Date().toISOString(),
@@ -437,6 +440,37 @@ export function getClientsByVendedor(vendedorId) {
   return getState().clients.filter((c) => c.activo !== false && c.vendedorId === vendedorId);
 }
 
+export function getClientesDe(user) {
+  return getActiveClients(user).filter((c) => c.tipo !== 'prospecto');
+}
+
+export function getProspectosDe(user) {
+  return getActiveClients(user).filter((c) => c.tipo === 'prospecto');
+}
+
+/** Prospecto libre: nace usable en salidas, sin aprobación ni tocar la cartera de clientes. */
+export function createProspect({ nombre, contacto, telefono, ubicacion, notas }, seller) {
+  const state = ensureMemory();
+  const prospect = normalizeClient({
+    id: createId('cli'),
+    nombre,
+    contacto,
+    telefono: telefono || '',
+    ubicacion: ubicacion || '',
+    notas: notas || '',
+    pais: seller?.pais || '',
+    vendedorId: seller.id,
+    vendedorNombre: seller.nombre,
+    tipo: 'prospecto',
+    origen: 'prospecto',
+    activo: true,
+    createdAt: new Date().toISOString(),
+  });
+  state.clients.push(prospect);
+  save(state);
+  return { state: getState(), prospect };
+}
+
 export function getEjecutivos() {
   return getState()
     .users.filter((u) => u.rol === 'vendedor' && u.activo !== false)
@@ -687,7 +721,7 @@ export function deleteClient(id) {
   return getState();
 }
 
-export function createClientRequest({ nombre, contacto, telefono, notas }, seller) {
+export function createClientRequest({ nombre, contacto, telefono, notas, prospectId = '' }, seller) {
   const state = ensureMemory();
   const req = {
     id: createId('req'),
@@ -695,6 +729,7 @@ export function createClientRequest({ nombre, contacto, telefono, notas }, selle
     contacto: String(contacto || '').trim(),
     telefono: String(telefono || '').trim(),
     notas: String(notas || '').trim(),
+    prospectId: prospectId || '',
     vendedorId: seller.id,
     vendedorNombre: seller.nombre,
     vendedorCorreo: seller.correo || '',
@@ -716,7 +751,10 @@ export function resolveClientRequest(id, decision, adminNote = '') {
   req.resolvedAt = new Date().toISOString();
   req.adminNote = String(adminNote || '').trim();
 
-  if (decision === 'aprobado') {
+  if (decision === 'aprobado' && req.prospectId) {
+    const prospect = state.clients.find((c) => c.id === req.prospectId);
+    if (prospect) prospect.tipo = 'cliente';
+  } else if (decision === 'aprobado') {
     const exists = state.clients.some(
       (c) =>
         c.nombre.toLowerCase() === req.nombre.toLowerCase() &&
@@ -872,7 +910,7 @@ export function getSalidaById(id) {
   return (getState().salidas || []).find((s) => s.id === id) || null;
 }
 
-export function markSalidaVisitada(id) {
+export function markSalidaVisitada(id, extra = {}) {
   const state = ensureMemory();
   if (!Array.isArray(state.salidas)) state.salidas = [];
   const idx = state.salidas.findIndex((s) => s.id === id);
@@ -881,6 +919,9 @@ export function markSalidaVisitada(id) {
     ...state.salidas[idx],
     estado: 'visitada',
     visitedAt: new Date().toISOString(),
+    reporte_tardio: Boolean(extra.reporte_tardio),
+    fecha_reporte_real: extra.fecha_reporte_real || '',
+    dias_retraso: extra.dias_retraso || 0,
   };
   save(state);
   return getState();

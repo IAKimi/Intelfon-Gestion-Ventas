@@ -39,6 +39,8 @@ function emptyEnvelope() {
 
     // B — Reporte de visita
     fecha_reporte_visitas: '',
+    reporte_tardio: false,
+    dias_retraso: 0,
     hora_reporte_visitas: '',
     cliente_reporte_visitas: '',
     contacto_reporte_visitas: '',
