@@ -30,6 +30,12 @@ import {
   getUserNotifications,
   markNotificationsRead,
   isCatalogoClientesActivo,
+  getTeamVendedores,
+  createCita,
+  getCitasForUser,
+  getCitaById,
+  markCitaRegistrada,
+  cancelCita,
 } from './store.js';
 import { getGps, fileToDataUrl, sendToMake } from './webhook.js';
 import {
@@ -480,7 +486,8 @@ function clientFieldsHtml({
   `;
 }
 
-function bindClientSelect(form) {
+function bindClientSelect(form, { autofill = true } = {}) {
+  if (!autofill) return;
   form.querySelectorAll('[data-client-select]').forEach((sel) => {
     const contactName = sel.dataset.clientSelect;
     const phoneName = sel.dataset.clientPhone;
@@ -575,6 +582,8 @@ function renderHome() {
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
+      ${user.es_jefe ? actionCard('/citas', 'Programar citas', 'Agende visitas a su equipo.', 'salida') : ''}
+      ${user.es_jefe ? actionCard('/dashboard', 'Dashboard', 'Visitas y pendientes de su equipo.', 'solicitudes') : ''}
       ${user.es_jefe ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
       ${
@@ -583,6 +592,30 @@ function renderHome() {
           : ''
       }
     </div>
+    ${(() => {
+      const citas = getCitasForUser(user.id)
+        .filter((c) => c.estado === 'programada')
+        .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+      if (!citas.length) return '';
+      return `
+      <section class="mt-5 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
+        <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas programadas para usted</h3>
+        <div class="mt-3 space-y-2">
+          ${citas
+            .map(
+              (c) => `
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div class="min-w-0">
+                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}</div>
+                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · Programada por ${escapeHtml(c.creadoPorNombre)}</p>
+              </div>
+              <button data-cita-salida="${c.id}" class="shrink-0 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">Registrar salida</button>
+            </div>`
+            )
+            .join('')}
+        </div>
+      </section>`;
+    })()}
     ${
       !isCatalogoClientesActivo()
         ? `<p class="mt-3 text-center text-[11px] text-slate-400">Modo libre: puede escribir el cliente a mano. El catálogo se activa desde Administración.</p>`
@@ -593,6 +626,9 @@ function renderHome() {
   );
   bindShell('/');
   bindGpsBanner();
+  document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
+    btn.addEventListener('click', () => go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`));
+  });
 
   const panel = document.getElementById('notes-panel');
   document.getElementById('btn-notes')?.addEventListener('click', () => {
@@ -695,6 +731,10 @@ function renderSalida() {
   const { fecha, hora } = nowParts();
   const user = getState().session;
   const tipos = resolveOptions(user, 'tipos_salida');
+  const citaId = new URLSearchParams(location.search).get('cita') || '';
+  const citaRaw = citaId ? getCitaById(citaId) : null;
+  const cita =
+    citaRaw && citaRaw.vendedorId === user.id && citaRaw.estado === 'programada' ? citaRaw : null;
 
   app.innerHTML = shell(
     `
@@ -703,14 +743,22 @@ function renderSalida() {
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
         Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>GPS en tiempo real</strong> como punto A.
       </div>
+      ${
+        cita
+          ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados.</div>`
+          : ''
+      }
       <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: fecha })}
-        ${field('Hora', 'hora_registro_salida', { type: 'time', value: hora })}
+        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: cita?.fecha || fecha })}
+        ${field('Hora', 'hora_registro_salida', { type: 'time', value: cita?.hora || hora })}
       </div>
       ${clientFieldsHtml({
         nameField: 'cliente_registro_salida',
         contactField: 'contacto_registro_salida',
         phoneField: 'telefono_registro_salida',
+        selected: cita?.clienteNombre || '',
+        contactValue: cita?.contacto || '',
+        phoneValue: cita?.telefono || '',
       })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
@@ -718,7 +766,7 @@ function renderSalida() {
         value: optionsHtml(tipos),
       })}
       ${field('Punto de referencia', 'punto_referencia', { placeholder: 'Referencia del destino' })}
-      ${field('Objetivo de la visita', 'objetivo_registro_salida', { type: 'textarea', placeholder: '¿Qué se busca lograr?' })}
+      ${field('Objetivo de la visita', 'objetivo_registro_salida', { type: 'textarea', placeholder: '¿Qué se busca lograr?', value: cita?.objetivo || '' })}
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Registrar salida</button>
     </form>
     `,
@@ -726,7 +774,8 @@ function renderSalida() {
   );
   bindShell('/');
   bindGpsBanner();
-  bindClientSelect(document.getElementById('form-salida'));
+  // El contacto solo se precarga cuando la salida nace de una cita programada.
+  bindClientSelect(document.getElementById('form-salida'), { autofill: Boolean(cita) });
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
     btn.textContent = 'Obteniendo GPS…';
@@ -739,7 +788,7 @@ function renderSalida() {
       longitud_registro_salidas: gps.longitud,
       gps_accuracy_salida: gps.accuracy,
     });
-    createPendingSalida(
+    const { salida } = createPendingSalida(
       {
         ...data,
         latitud_registro_salidas: gps.latitud,
@@ -748,6 +797,7 @@ function renderSalida() {
       },
       session
     );
+    if (cita) markCitaRegistrada(cita.id, salida.id);
     showToast(`${result.message} GPS: ${gps.latitud}, ${gps.longitud}`);
     go('/');
   });
@@ -997,6 +1047,200 @@ function renderReintegro() {
     showToast(result.message);
     go('/');
   });
+}
+
+function renderCitas() {
+  const user = getState().session;
+  const team = getTeamVendedores(user);
+  const { fecha, hora } = nowParts();
+  const citas = (getState().citas || [])
+    .filter((c) => c.creadoPorId === user.id || team.some((t) => t.id === c.vendedorId))
+    .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+
+  app.innerHTML = shell(
+    `
+    <form id="form-cita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <p class="text-sm text-slate-500">La cita le llegará al vendedor con el contacto ya cargado.</p>
+      <div class="grid gap-4 sm:grid-cols-2">
+        ${field('Vendedor', 'vendedorId', {
+          type: 'select',
+          value: `<option value="">Seleccione…</option>${team.map((t) => `<option value="${t.id}">${escapeHtml(t.nombre)} (${escapeHtml(t.pais || '')})</option>`).join('')}`,
+        })}
+        <div>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
+          <select name="clienteId" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+            <option value="">Primero elija vendedor</option>
+          </select>
+        </div>
+        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Se completa al elegir cliente' })}
+        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}
+        ${field('Fecha', 'fecha', { type: 'date', value: fecha })}
+        ${field('Hora', 'hora', { type: 'time', value: hora })}
+      </div>
+      ${field('Objetivo de la visita', 'objetivo', { type: 'textarea', required: false, placeholder: '¿Qué se busca lograr?' })}
+      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg hover:bg-red-700">Programar cita</button>
+    </form>
+
+    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas programadas</h3>
+      <div class="mt-3 space-y-2">
+        ${
+          citas.length
+            ? citas
+                .map(
+                  (c) => `
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div>
+                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)} · ${escapeHtml(c.vendedorNombre)}</div>
+                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.estado)}</p>
+              </div>
+              ${c.estado === 'programada' ? `<button data-cancel-cita="${c.id}" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Cancelar</button>` : ''}
+            </div>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400">Aún no ha programado citas.</p>'
+        }
+      </div>
+    </section>
+    `,
+    { title: 'Programar citas', showBack: true, backTo: '/' }
+  );
+  bindShell('/');
+  const form = document.getElementById('form-cita');
+  const vendedorSel = form.querySelector('[name="vendedorId"]');
+  const clienteSel = form.querySelector('[name="clienteId"]');
+  const fillClientes = () => {
+    const clientes = getClientsByVendedor(vendedorSel.value);
+    clienteSel.innerHTML =
+      '<option value="">Seleccione un cliente</option>' +
+      clientes
+        .map(
+          (c) =>
+            `<option value="${c.id}" data-nombre="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}">${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
+        )
+        .join('');
+  };
+  vendedorSel.addEventListener('change', fillClientes);
+  clienteSel.addEventListener('change', () => {
+    const opt = clienteSel.selectedOptions[0];
+    if (!opt) return;
+    form.querySelector('[name="contacto"]').value = opt.dataset.contacto || '';
+    form.querySelector('[name="telefono"]').value = opt.dataset.telefono || '';
+  });
+  document.querySelectorAll('[data-cancel-cita]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      cancelCita(btn.dataset.cancelCita);
+      showToast('Cita cancelada.');
+      render();
+    });
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const opt = clienteSel.selectedOptions[0];
+    if (!opt?.value) {
+      showToast('Elija un cliente.', 'err');
+      return;
+    }
+    createCita(
+      {
+        vendedorId: String(fd.get('vendedorId') || ''),
+        clienteId: opt.value,
+        clienteNombre: opt.dataset.nombre || '',
+        contacto: String(fd.get('contacto') || ''),
+        telefono: String(fd.get('telefono') || ''),
+        fecha: String(fd.get('fecha') || ''),
+        hora: String(fd.get('hora') || ''),
+        objetivo: String(fd.get('objetivo') || ''),
+      },
+      user
+    );
+    showToast('Cita programada. El vendedor ya la puede ver.');
+    render();
+  });
+}
+
+function renderDashboard() {
+  const user = getState().session;
+  const isAdmin = user.rol === 'admin';
+  const ejecutivos = isAdmin ? getEjecutivos() : getTeamVendedores(user);
+  const state = getState();
+  const rows = ejecutivos.map((u) => {
+    const salidas = (state.salidas || []).filter((s) => s.vendedorId === u.id);
+    const visitadas = salidas.filter((s) => s.estado === 'visitada').length;
+    return {
+      nombre: u.nombre,
+      pais: u.pais || '',
+      clientes: getClientsByVendedor(u.id).length,
+      salidas: salidas.length,
+      visitadas,
+      pendientes: salidas.length - visitadas,
+      citas: getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
+    };
+  });
+  const tot = rows.reduce(
+    (a, r) => ({
+      salidas: a.salidas + r.salidas,
+      visitadas: a.visitadas + r.visitadas,
+      pendientes: a.pendientes + r.pendientes,
+    }),
+    { salidas: 0, visitadas: 0, pendientes: 0 }
+  );
+  const card = (label, value) => `
+    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">${label}</div>
+      <div class="mt-1 text-2xl font-black text-slate-900">${value}</div>
+    </div>`;
+
+  app.innerHTML = shell(
+    `
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      ${card('Ejecutivos', rows.length)}
+      ${card('Salidas registradas', tot.salidas)}
+      ${card('Visitas reportadas', tot.visitadas)}
+      ${card('Pendientes', tot.pendientes)}
+    </div>
+    <section class="mt-5 overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <table class="w-full min-w-[640px] text-left text-sm">
+        <thead>
+          <tr class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
+            <th class="px-4 py-3 font-bold">Ejecutivo</th>
+            <th class="px-4 py-3 font-bold">País</th>
+            <th class="px-4 py-3 font-bold">Clientes</th>
+            <th class="px-4 py-3 font-bold">Salidas</th>
+            <th class="px-4 py-3 font-bold">Reportadas</th>
+            <th class="px-4 py-3 font-bold">Pendientes</th>
+            <th class="px-4 py-3 font-bold">Citas prog.</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            rows.length
+              ? rows
+                  .map(
+                    (r) => `
+            <tr class="border-b border-slate-50">
+              <td class="px-4 py-3 font-semibold text-slate-900">${escapeHtml(r.nombre)}</td>
+              <td class="px-4 py-3 text-slate-600">${escapeHtml(r.pais || '—')}</td>
+              <td class="px-4 py-3 text-slate-600">${r.clientes}</td>
+              <td class="px-4 py-3 text-slate-600">${r.salidas}</td>
+              <td class="px-4 py-3 text-emerald-700 font-semibold">${r.visitadas}</td>
+              <td class="px-4 py-3 ${r.pendientes ? 'text-amber-700 font-semibold' : 'text-slate-600'}">${r.pendientes}</td>
+              <td class="px-4 py-3 text-slate-600">${r.citas}</td>
+            </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin ejecutivos en el alcance.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+    <p class="mt-3 text-[11px] text-slate-400">Los kilómetros por ejecutivo se calculan en Make y quedan en Sheets (columnas O y P de Reporte de Visitas).</p>
+    `,
+    { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/' }
+  );
+  if (isAdmin) bindAdminSubShell();
+  else bindShell('/');
 }
 
 function renderCartera() {
@@ -1262,6 +1506,7 @@ function renderAdminHub() {
       ${actionCard('/admin/catalogos', 'Catálogos globales', 'Opciones de formularios.', 'catalogos')}
       ${actionCard('/admin/usuarios', 'Usuarios', 'Correos, claves y permisos.', 'usuarios')}
       ${actionCard('/admin/historial', 'Historial de contactos', 'Cambios de contacto por ejecutivo.', 'solicitudes')}
+      ${actionCard('/admin/dashboard', 'Dashboard', 'Visitas y pendientes por ejecutivo.', 'visita')}
     </div>
     `,
     { title: 'Administración' }
@@ -2245,6 +2490,9 @@ function routeAdmin(path) {
     case '/admin/historial':
       renderAdminHistorial();
       break;
+    case '/admin/dashboard':
+      renderDashboard();
+      break;
     case '/admin':
       renderAdminHub();
       break;
@@ -2313,6 +2561,20 @@ function render() {
         return;
       }
       renderAdminHistorial('/historial');
+      break;
+    case '/citas':
+      if (!user.es_jefe) {
+        go('/', { replace: true, animate: false });
+        return;
+      }
+      renderCitas();
+      break;
+    case '/dashboard':
+      if (!user.es_jefe) {
+        go('/', { replace: true, animate: false });
+        return;
+      }
+      renderDashboard();
       break;
     case '/reintegro':
       renderReintegro();

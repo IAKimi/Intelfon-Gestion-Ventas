@@ -173,6 +173,10 @@ async function migrate() {
     ALTER TABLE app_state
     ADD COLUMN IF NOT EXISTS contact_changes JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
+  await pool.query(`
+    ALTER TABLE app_state
+    ADD COLUMN IF NOT EXISTS citas JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
 
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS transporte_default TEXT NOT NULL DEFAULT ''
@@ -258,6 +262,7 @@ async function getAppPayload(sessionUser = null, full = false) {
   let contactChanges = s.contact_changes || [];
   let notifications = s.notifications || [];
   let salidas = s.salidas || [];
+  let citas = s.citas || [];
   let visibleUsers = users;
   let webhookUrl = s.webhook_url || DEFAULT_WEBHOOK_URL;
 
@@ -273,12 +278,20 @@ async function getAppPayload(sessionUser = null, full = false) {
         .map((u) => u.id)
     );
     teamIds.add(sessionUser.id);
-    clients = clients.filter((c) => c.vendedorId === sessionUser.id);
+    const isJefe = Boolean(me?.es_jefe);
+    clients = clients.filter(
+      (c) => c.vendedorId === sessionUser.id || (isJefe && teamIds.has(c.vendedorId))
+    );
     clientRequests = clientRequests.filter((r) => r.vendedorId === sessionUser.id);
     contactChanges = contactChanges.filter((x) => teamIds.has(x.vendedorId));
     notifications = notifications.filter((n) => n.userId === sessionUser.id);
-    salidas = salidas.filter((x) => x.vendedorId === sessionUser.id);
-    visibleUsers = me ? [me] : [];
+    salidas = salidas.filter((x) => (isJefe ? teamIds.has(x.vendedorId) : x.vendedorId === sessionUser.id));
+    citas = citas.filter(
+      (c) =>
+        c.vendedorId === sessionUser.id ||
+        (isJefe && (teamIds.has(c.vendedorId) || c.creadoPorId === sessionUser.id))
+    );
+    visibleUsers = isJefe ? users.filter((u) => teamIds.has(u.id)) : me ? [me] : [];
     webhookUrl = '';
   }
 
@@ -293,6 +306,7 @@ async function getAppPayload(sessionUser = null, full = false) {
     contactChanges,
     notifications,
     salidas,
+    citas,
     users: visibleUsers,
     session: sessionUser
       ? users.find((u) => u.id === sessionUser.id) || publicUser(sessionUser)
@@ -454,15 +468,51 @@ function mergeSellerClientRequests(currentReqs, submitted, userId) {
   return [...byId.values()];
 }
 
-/** Vendedor: solo marca leídas sus notificaciones; no crea ni borra. */
-function mergeSellerNotifications(currentNotes, submitted, userId) {
+/** Vendedor: marca leídas las suyas; el jefe además puede crear avisos para su equipo. */
+function mergeSellerNotifications(currentNotes, submitted, userId, teamIds = new Set()) {
   if (!Array.isArray(submitted)) return currentNotes || [];
   const byId = new Map(submitted.map((x) => [x?.id, x]));
-  return (currentNotes || []).map((n) => {
+  const merged = (currentNotes || []).map((n) => {
     if (n.userId !== userId) return n;
     const next = byId.get(n.id);
     return next ? { ...n, leida: Boolean(next.leida) } : n;
   });
+  const known = new Set(merged.map((n) => n.id));
+  for (const n of submitted) {
+    if (n?.id && !known.has(n.id) && teamIds.has(n.userId)) merged.unshift(n);
+  }
+  return merged;
+}
+
+function teamIdsOf(user, allUsers) {
+  const correo = String(user?.correo || '').trim().toLowerCase();
+  if (!correo) return new Set();
+  return new Set(
+    (allUsers || [])
+      .filter((u) => String(u.correo_jefe || '').trim().toLowerCase() === correo)
+      .map((u) => u.id)
+  );
+}
+
+/** Citas: el jefe crea para su equipo; el vendedor marca la suya como registrada. */
+function mergeCitas(currentCitas, submitted, user, allUsers) {
+  if (!Array.isArray(submitted)) return currentCitas || [];
+  const teamIds = teamIdsOf(user, allUsers);
+  const byId = new Map((currentCitas || []).map((x) => [x.id, x]));
+  for (const item of submitted) {
+    if (!item?.id) continue;
+    const existing = byId.get(item.id);
+    if (existing) {
+      if (existing.vendedorId === user.id) {
+        byId.set(item.id, { ...existing, estado: item.estado || existing.estado, salidaId: item.salidaId ?? existing.salidaId });
+      } else if (existing.creadoPorId === user.id) {
+        byId.set(item.id, { ...existing, ...item, creadoPorId: existing.creadoPorId, vendedorId: existing.vendedorId });
+      }
+    } else if (teamIds.has(item.vendedorId) && item.creadoPorId === user.id) {
+      byId.set(item.id, { ...item, estado: 'programada' });
+    }
+  }
+  return [...byId.values()];
 }
 
 /** Vendedor: solo agrega cambios suyos sobre clientes propios, no borra historial. */
@@ -553,12 +603,22 @@ app.put('/api/state', requireAuth, async (req, res) => {
         ? Array.isArray(body.notifications)
           ? body.notifications
           : current.notifications
-        : mergeSellerNotifications(current.notifications, body.notifications, req.user.id),
+        : mergeSellerNotifications(
+            current.notifications,
+            body.notifications,
+            req.user.id,
+            teamIdsOf(current.session || req.user, current.users)
+          ),
       salidas: isAdmin
         ? Array.isArray(body.salidas)
           ? body.salidas
           : current.salidas
         : mergeSellerSalidas(current.salidas, body.salidas, req.user.id),
+      citas: isAdmin
+        ? Array.isArray(body.citas)
+          ? body.citas
+          : current.citas
+        : mergeCitas(current.citas, body.citas, current.session || req.user, current.users),
     };
 
     await pool.query(
@@ -573,6 +633,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         notifications = $8::jsonb,
         salidas = $9::jsonb,
         contact_changes = $10::jsonb,
+        citas = $11::jsonb,
         updated_at = NOW()
        WHERE id = 1`,
       [
@@ -586,6 +647,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         JSON.stringify(next.notifications),
         JSON.stringify(next.salidas),
         JSON.stringify(next.contactChanges || []),
+        JSON.stringify(next.citas || []),
       ]
     );
 

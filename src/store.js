@@ -46,6 +46,7 @@ const DEFAULT_STATE = {
   contactChanges: [],
   notifications: [],
   salidas: [],
+  citas: [],
   users: [
     {
       id: 'admin-1',
@@ -189,6 +190,7 @@ function applyRemotePayload(payload, sessionOverride) {
     contactChanges: Array.isArray(payload.contactChanges) ? payload.contactChanges : [],
     notifications: Array.isArray(payload.notifications) ? payload.notifications : [],
     salidas: Array.isArray(payload.salidas) ? payload.salidas : [],
+    citas: Array.isArray(payload.citas) ? payload.citas : [],
     users: (payload.users || []).map(normalizeUser),
     session: sessionOverride || payload.session || null,
   };
@@ -221,6 +223,7 @@ function loadLocal() {
       contactChanges: Array.isArray(parsed.contactChanges) ? parsed.contactChanges : [],
       notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
       salidas: Array.isArray(parsed.salidas) ? parsed.salidas : [],
+      citas: Array.isArray(parsed.citas) ? parsed.citas : [],
       correo_ventas: parsed.correo_ventas || DEFAULT_STATE.correo_ventas,
       catalogoClientesActivo: Boolean(parsed.catalogoClientesActivo),
       webhookUrl: String(parsed.webhookUrl || '').trim() || DEFAULT_WEBHOOK_URL,
@@ -265,6 +268,7 @@ async function runRemoteSync() {
       contactChanges: state.contactChanges || [],
       notifications: state.notifications,
       salidas: state.salidas,
+      citas: state.citas || [],
       users: state.users,
     });
     // Si hubo cambios durante el envío, no pisarlos con la respuesta.
@@ -878,6 +882,81 @@ export function markSalidaVisitada(id) {
     estado: 'visitada',
     visitedAt: new Date().toISOString(),
   };
+  save(state);
+  return getState();
+}
+
+/** Vendedores cuyo correo_jefe es el del usuario (su equipo por país). */
+export function getTeamVendedores(user) {
+  if (!user) return [];
+  if (user.rol === 'admin') return getEjecutivos();
+  const jefe = String(user.correo || '').trim().toLowerCase();
+  if (!jefe) return [];
+  return getEjecutivos().filter(
+    (u) => String(u.correo_jefe || '').trim().toLowerCase() === jefe
+  );
+}
+
+/** El jefe (o admin) programa una cita a un vendedor de su equipo. */
+export function createCita(data, creator) {
+  const state = ensureMemory();
+  if (!Array.isArray(state.citas)) state.citas = [];
+  const seller = state.users.find((u) => u.id === data.vendedorId);
+  const cita = {
+    id: createId('cit'),
+    vendedorId: data.vendedorId || '',
+    vendedorNombre: seller?.nombre || '',
+    creadoPorId: creator.id,
+    creadoPorNombre: creator.nombre || '',
+    clienteId: data.clienteId || '',
+    clienteNombre: String(data.clienteNombre || '').trim(),
+    contacto: String(data.contacto || '').trim(),
+    telefono: String(data.telefono || '').trim(),
+    fecha: data.fecha || '',
+    hora: data.hora || '',
+    objetivo: String(data.objetivo || '').trim(),
+    estado: 'programada',
+    salidaId: null,
+    createdAt: new Date().toISOString(),
+  };
+  state.citas.unshift(cita);
+  state.notifications.unshift({
+    id: createId('ntf'),
+    userId: cita.vendedorId,
+    tipo: 'cita_programada',
+    titulo: 'Cita programada',
+    mensaje: `${creator.nombre} le programó una visita a “${cita.clienteNombre}” el ${cita.fecha}${cita.hora ? ` a las ${cita.hora}` : ''}.`,
+    leida: false,
+    createdAt: new Date().toISOString(),
+    citaId: cita.id,
+  });
+  save(state);
+  return { state: getState(), cita };
+}
+
+export function getCitasForUser(userId) {
+  return (getState().citas || []).filter((c) => c.vendedorId === userId);
+}
+
+export function getCitaById(id) {
+  return (getState().citas || []).find((c) => c.id === id) || null;
+}
+
+export function markCitaRegistrada(citaId, salidaId) {
+  const state = ensureMemory();
+  const cita = (state.citas || []).find((c) => c.id === citaId);
+  if (!cita) return getState();
+  cita.estado = 'registrada';
+  cita.salidaId = salidaId || null;
+  save(state);
+  return getState();
+}
+
+export function cancelCita(citaId) {
+  const state = ensureMemory();
+  const cita = (state.citas || []).find((c) => c.id === citaId);
+  if (!cita) return getState();
+  cita.estado = 'cancelada';
   save(state);
   return getState();
 }
