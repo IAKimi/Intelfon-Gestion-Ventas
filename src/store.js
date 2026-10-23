@@ -40,6 +40,7 @@ const DEFAULT_STATE = {
   catalogoClientesActivo: false,
   webhookUrl: DEFAULT_WEBHOOK_URL,
   correo_ventas: 'ventas@red.com.sv',
+  export_api_key: '',
   catalogos: structuredClone(DEFAULT_CATALOGOS),
   clients: [],
   clientRequests: [],
@@ -135,8 +136,66 @@ function normalizeRole(r) {
   };
 }
 
+function normalizeContactEntry(x) {
+  if (!x || typeof x !== 'object') return null;
+  const nombre = String(x.nombre || '').trim();
+  if (!nombre) return null;
+  return {
+    id: x.id || createId('ctc'),
+    nombre,
+    cargo: String(x.cargo || '').trim(),
+    telefono: String(x.telefono || '').trim(),
+    telefono_fijo: String(x.telefono_fijo || '').trim(),
+    correo: String(x.correo || '').trim(),
+  };
+}
+
+/** Lista unificada: contactos guardados + GG/GO/GF + contacto principal. */
+export function listClientContacts(client) {
+  if (!client) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (entry) => {
+    const n = normalizeContactEntry(entry);
+    if (!n) return;
+    const key = n.nombre.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(n);
+  };
+  (Array.isArray(client.contactos) ? client.contactos : []).forEach(push);
+  for (const [cargo, role] of [
+    ['GG', client.gg],
+    ['GO', client.go],
+    ['GF', client.gf],
+  ]) {
+    if (role?.nombre) {
+      push({
+        nombre: role.nombre,
+        cargo,
+        telefono: role.celular || '',
+        telefono_fijo: role.tel_fijo || '',
+        correo: role.correo || '',
+      });
+    }
+  }
+  if (client.contacto) {
+    push({
+      nombre: client.contacto,
+      cargo: client.contacto_rol || '',
+      telefono: client.telefono || '',
+      telefono_fijo: client.telefono_fijo || '',
+      correo: client.correo_contacto || '',
+    });
+  }
+  return out;
+}
+
 export function normalizeClient(c) {
   const pais = String(c.pais || '').trim().toUpperCase();
+  const contactos = (Array.isArray(c.contactos) ? c.contactos : [])
+    .map(normalizeContactEntry)
+    .filter(Boolean);
   return {
     id: c.id || createId('cli'),
     codigo: String(c.codigo || '').trim(),
@@ -146,6 +205,7 @@ export function normalizeClient(c) {
     telefono_fijo: String(c.telefono_fijo || '').trim(),
     correo_contacto: String(c.correo_contacto || '').trim(),
     contacto_rol: String(c.contacto_rol || '').trim(),
+    contactos,
     gg: normalizeRole(c.gg),
     go: normalizeRole(c.go),
     gf: normalizeRole(c.gf),
@@ -187,6 +247,7 @@ function applyRemotePayload(payload, sessionOverride) {
     catalogoClientesActivo: Boolean(payload.catalogoClientesActivo),
     webhookUrl: String(payload.webhookUrl || '').trim() || DEFAULT_WEBHOOK_URL,
     correo_ventas: payload.correo_ventas || DEFAULT_STATE.correo_ventas,
+    export_api_key: payload.export_api_key || '',
     catalogos: normalizeCatalogos(payload.catalogos),
     clients: (Array.isArray(payload.clients) ? payload.clients : []).map(normalizeClient),
     clientRequests: Array.isArray(payload.clientRequests) ? payload.clientRequests : [],
@@ -265,6 +326,7 @@ async function runRemoteSync() {
       catalogoClientesActivo: state.catalogoClientesActivo,
       webhookUrl: state.webhookUrl,
       correo_ventas: state.correo_ventas,
+      export_api_key: state.export_api_key || '',
       catalogos: state.catalogos,
       clients: state.clients,
       clientRequests: state.clientRequests,
@@ -383,7 +445,7 @@ function matchesLogin(u, login) {
   );
 }
 
-/** @param {'admin' | 'vendedor'} expectedRole */
+/** @param {'admin' | 'vendedor' | 'jefe'} expectedRole */
 export async function login(usuario, password, expectedRole) {
   if (remoteMode) {
     try {
@@ -398,16 +460,27 @@ export async function login(usuario, password, expectedRole) {
   }
 
   const state = getState();
+  const roleOk = (rol) => {
+    if (expectedRole === 'admin') return rol === 'admin';
+    if (expectedRole === 'vendedor') return rol === 'vendedor' || rol === 'jefe';
+    return rol === expectedRole;
+  };
   const user = state.users.find(
-    (u) =>
-      matchesLogin(u, usuario) &&
-      u.password === password &&
-      u.activo &&
-      u.rol === expectedRole
+    (u) => matchesLogin(u, usuario) && u.password === password && u.activo && roleOk(u.rol)
   );
   if (!user) return null;
   setSession(user);
   return user;
+}
+
+export function isJefe(user) {
+  if (!user) return false;
+  if (user.rol === 'jefe' || user.es_jefe) return true;
+  const correo = String(user.correo || '').toLowerCase();
+  if (!correo) return false;
+  return getState().users.some(
+    (u) => u.rol !== 'admin' && String(u.correo_jefe || '').toLowerCase() === correo
+  );
 }
 
 export async function logout() {
@@ -483,12 +556,19 @@ export function getEjecutivos() {
     });
 }
 
-export function updateConfig({ combustibleGlobal, webhookUrl, correo_ventas, catalogoClientesActivo }) {
+export function updateConfig({
+  combustibleGlobal,
+  webhookUrl,
+  correo_ventas,
+  catalogoClientesActivo,
+  export_api_key,
+}) {
   const state = ensureMemory();
   if (typeof combustibleGlobal === 'boolean') state.combustibleGlobal = combustibleGlobal;
   if (typeof catalogoClientesActivo === 'boolean') state.catalogoClientesActivo = catalogoClientesActivo;
   if (typeof webhookUrl === 'string') state.webhookUrl = webhookUrl.trim();
   if (typeof correo_ventas === 'string') state.correo_ventas = correo_ventas.trim();
+  if (typeof export_api_key === 'string') state.export_api_key = export_api_key.trim();
   save(state);
   return getState();
 }
@@ -588,14 +668,19 @@ function clientMatchKey(c) {
   return `n:${pais}:${String(c.nombre || '').trim().toLowerCase()}`;
 }
 
-/** Importa cartera INTELFON: crea stubs de ejecutivos y asigna clientes. */
-export function importClients(rows, { omittedFile = 0 } = {}) {
+/** Importa cartera INTELFON: crea stubs de ejecutivos y asigna clientes. mode: merge | replace */
+export function importClients(rows, { omittedFile = 0, mode = 'merge' } = {}) {
   const state = ensureMemory();
   let added = 0;
   let updated = 0;
   let skipped = 0;
   let usersCreated = 0;
   const beforeUsers = state.users.length;
+  const beforeClients = state.clients.filter((c) => c.tipo !== 'prospecto').length;
+
+  if (mode === 'replace') {
+    state.clients = state.clients.filter((c) => c.tipo === 'prospecto');
+  }
 
   for (const row of rows) {
     const nombre = String(row.nombre || '').trim();
@@ -613,6 +698,24 @@ export function importClients(rows, { omittedFile = 0 } = {}) {
       if (state.users.length > before) usersCreated += 1;
     }
 
+    const contactos = [];
+    for (const [cargo, role] of [
+      ['GG', row.gg],
+      ['GO', row.go],
+      ['GF', row.gf],
+    ]) {
+      if (role?.nombre) {
+        contactos.push({
+          id: createId('ctc'),
+          nombre: role.nombre,
+          cargo,
+          telefono: role.celular || '',
+          telefono_fijo: role.tel_fijo || '',
+          correo: role.correo || '',
+        });
+      }
+    }
+
     const next = normalizeClient({
       codigo: row.codigo,
       nombre,
@@ -621,6 +724,7 @@ export function importClients(rows, { omittedFile = 0 } = {}) {
       telefono_fijo: row.telefono_fijo,
       correo_contacto: row.correo_contacto,
       contacto_rol: row.contacto_rol,
+      contactos,
       gg: row.gg,
       go: row.go,
       gf: row.gf,
@@ -634,11 +738,14 @@ export function importClients(rows, { omittedFile = 0 } = {}) {
     const key = clientMatchKey(next);
     const idx = state.clients.findIndex((c) => clientMatchKey(c) === key && c.activo !== false);
     if (idx >= 0) {
+      const prev = state.clients[idx];
+      const mergedContacts = listClientContacts({ ...prev, contactos: next.contactos });
       state.clients[idx] = {
-        ...state.clients[idx],
+        ...prev,
         ...next,
-        id: state.clients[idx].id,
-        createdAt: state.clients[idx].createdAt,
+        id: prev.id,
+        createdAt: prev.createdAt,
+        contactos: mergedContacts,
       };
       updated += 1;
     } else {
@@ -655,6 +762,9 @@ export function importClients(rows, { omittedFile = 0 } = {}) {
     skipped: skipped + omittedFile,
     usersCreated: usersCreated || Math.max(0, state.users.length - beforeUsers),
     stubPassword: STUB_PASSWORD,
+    beforeClients,
+    afterClients: state.clients.filter((c) => c.tipo !== 'prospecto').length,
+    mode,
   };
 }
 
@@ -674,6 +784,58 @@ export const CONTACT_FIELDS = [
   { key: 'telefono_fijo', label: 'Teléfono fijo' },
   { key: 'correo_contacto', label: 'Correo contacto' },
 ];
+
+/** Agrega un contacto a la lista del cliente (y lo deja como principal). */
+export function addClientContact(clientId, contactData, user) {
+  const state = ensureMemory();
+  const idx = state.clients.findIndex((c) => c.id === clientId);
+  if (idx < 0 || !user) return { state: getState(), added: false };
+  const client = state.clients[idx];
+  if (user.rol !== 'admin' && client.vendedorId !== user.id) {
+    return { state: getState(), added: false };
+  }
+  const entry = normalizeContactEntry(contactData);
+  if (!entry) return { state: getState(), added: false };
+  if (!Array.isArray(client.contactos)) client.contactos = [];
+  const exists = listClientContacts(client).some(
+    (x) => x.nombre.toLowerCase() === entry.nombre.toLowerCase()
+  );
+  if (!exists) client.contactos.push(entry);
+  client.contacto = entry.nombre;
+  client.telefono = entry.telefono || client.telefono;
+  client.telefono_fijo = entry.telefono_fijo || client.telefono_fijo;
+  client.correo_contacto = entry.correo || client.correo_contacto;
+  client.contacto_rol = entry.cargo || client.contacto_rol;
+  if (!Array.isArray(state.contactChanges)) state.contactChanges = [];
+  state.contactChanges.push({
+    id: createId('chg'),
+    clientId: client.id,
+    codigo: client.codigo || '',
+    clienteNombre: client.nombre || '',
+    pais: client.pais || '',
+    campo: 'contacto_nuevo',
+    campoLabel: 'Contacto nuevo',
+    anterior: '',
+    nuevo: entry.nombre,
+    vendedorId: client.vendedorId || user.id,
+    vendedorNombre: client.vendedorNombre || user.nombre || '',
+    correo_jefe: state.users.find((u) => u.id === client.vendedorId)?.correo_jefe || '',
+    createdAt: new Date().toISOString(),
+  });
+  save(state);
+  return { state: getState(), added: true, contact: entry };
+}
+
+export function removeClientContact(clientId, contactId, user) {
+  const state = ensureMemory();
+  const idx = state.clients.findIndex((c) => c.id === clientId);
+  if (idx < 0 || !user) return getState();
+  const client = state.clients[idx];
+  if (user.rol !== 'admin' && client.vendedorId !== user.id) return getState();
+  client.contactos = (client.contactos || []).filter((x) => x.id !== contactId);
+  save(state);
+  return getState();
+}
 
 /** Edita contacto de un cliente propio y deja trazabilidad (anterior → nuevo). */
 export function updateClientContact(clientId, fields, user) {

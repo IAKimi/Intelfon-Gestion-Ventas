@@ -25,6 +25,9 @@ import {
   upsertClient,
   deleteClient,
   updateClientContact,
+  addClientContact,
+  removeClientContact,
+  listClientContacts,
   createClientRequest,
   resolveClientRequest,
   getUserNotifications,
@@ -39,6 +42,7 @@ import {
   getCitaById,
   markCitaRegistrada,
   cancelCita,
+  isJefe,
 } from './store.js';
 import { getGps, fileToDataUrl, sendToMake } from './webhook.js';
 import {
@@ -443,6 +447,7 @@ function clientFieldsHtml({
   contactLabel = 'Nombre de contacto',
   phoneLabel = 'Teléfono',
   items = null,
+  withContactPicker = false,
 } = {}) {
   const phoneBlock = phoneField
     ? field(phoneLabel, phoneField, {
@@ -463,19 +468,33 @@ function clientFieldsHtml({
 
   const clients = items || getActiveClients();
   const opts = clients
-    .map(
-      (c) =>
-        `<option value="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" data-correo="${escapeHtml(c.correo_contacto || '')}" data-ubicacion="${escapeHtml(c.ubicacion || '')}" ${
-          c.nombre === selected ? 'selected' : ''
-        }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
-    )
+    .map((c) => {
+      const contacts = listClientContacts(c);
+      const payload = encodeURIComponent(JSON.stringify(contacts));
+      return `<option value="${escapeHtml(c.nombre)}" data-id="${escapeHtml(c.id)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" data-correo="${escapeHtml(c.correo_contacto || '')}" data-ubicacion="${escapeHtml(c.ubicacion || '')}" data-contactos="${payload}" ${
+        c.nombre === selected ? 'selected' : ''
+      }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`;
+    })
     .join('');
+  const picker = withContactPicker
+    ? `
+    <div>
+      <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Contacto</label>
+      <select name="_contacto_picker" data-contact-picker class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+        <option value="">Seleccione un contacto</option>
+        <option value="__otro__">Otro (escribir nuevo)</option>
+      </select>
+      <p class="mt-1 text-[11px] text-slate-400">Si elige «Otro», escriba el contacto abajo. Al registrar podrá guardarlo para la próxima vez.</p>
+    </div>
+    <input type="hidden" name="_cliente_id" value="" />
+    <input type="hidden" name="_contacto_nuevo" value="0" />`
+    : '';
   return `
     <div>
       <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
       <select name="${nameField}" required data-client-select="${contactField}" ${
         phoneField ? `data-client-phone="${phoneField}"` : ''
-      } class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+      } ${withContactPicker ? 'data-with-picker="1"' : ''} class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
         <option value="">Seleccione un cliente</option>
         ${opts || '<option value="" disabled>No hay clientes cargados</option>'}
       </select>
@@ -485,28 +504,81 @@ function clientFieldsHtml({
           : ''
       }
     </div>
-    ${field(contactLabel, contactField, { placeholder: 'Se completa al elegir cliente', required: false, value: contactValue })}
+    ${picker}
+    ${field(contactLabel, contactField, { placeholder: withContactPicker ? 'Persona de contacto' : 'Se completa al elegir cliente', required: false, value: contactValue })}
     ${phoneBlock}
   `;
 }
 
 function bindClientSelect(form, { autofill = true } = {}) {
-  if (!autofill) return;
   form.querySelectorAll('[data-client-select]').forEach((sel) => {
     const contactName = sel.dataset.clientSelect;
     const phoneName = sel.dataset.clientPhone;
+    const withPicker = sel.dataset.withPicker === '1';
+    const picker = form.querySelector('[data-contact-picker]');
+    const clientIdInput = form.querySelector('[name="_cliente_id"]');
+    const nuevoFlag = form.querySelector('[name="_contacto_nuevo"]');
     if (!contactName) return;
-    const sync = () => {
+
+    const fillPicker = () => {
+      if (!picker) return;
       const opt = sel.selectedOptions[0];
-      const contactInput = form.querySelector(`[name="${contactName}"]`);
-      if (contactInput && opt) contactInput.value = opt.dataset.contacto || '';
-      if (phoneName) {
-        const phoneInput = form.querySelector(`[name="${phoneName}"]`);
-        if (phoneInput && opt) phoneInput.value = opt.dataset.telefono || '';
+      let contacts = [];
+      try {
+        contacts = JSON.parse(decodeURIComponent(opt?.dataset.contactos || '%5B%5D'));
+      } catch {
+        contacts = [];
       }
+      if (clientIdInput) clientIdInput.value = opt?.dataset.id || '';
+      picker.innerHTML =
+        '<option value="">Seleccione un contacto</option>' +
+        contacts
+          .map(
+            (c) =>
+              `<option value="${escapeHtml(c.nombre)}" data-telefono="${escapeHtml(c.telefono || '')}" data-cargo="${escapeHtml(c.cargo || '')}">${escapeHtml(c.nombre)}${c.cargo ? ` (${escapeHtml(c.cargo)})` : ''}</option>`
+          )
+          .join('') +
+        '<option value="__otro__">Otro (escribir nuevo)</option>';
     };
-    sel.addEventListener('change', sync);
-    sync();
+
+    const applyContact = () => {
+      const contactInput = form.querySelector(`[name="${contactName}"]`);
+      const phoneInput = phoneName ? form.querySelector(`[name="${phoneName}"]`) : null;
+      if (!withPicker || !picker) {
+        if (!autofill) return;
+        const opt = sel.selectedOptions[0];
+        if (contactInput && opt) contactInput.value = opt.dataset.contacto || '';
+        if (phoneInput && opt) phoneInput.value = opt.dataset.telefono || '';
+        return;
+      }
+      const pOpt = picker.selectedOptions[0];
+      if (!pOpt || pOpt.value === '' || pOpt.value === '__otro__') {
+        if (pOpt?.value === '__otro__') {
+          if (contactInput) contactInput.value = '';
+          if (phoneInput) phoneInput.value = '';
+          if (nuevoFlag) nuevoFlag.value = '1';
+          contactInput?.removeAttribute('readonly');
+          phoneInput?.removeAttribute('readonly');
+        }
+        return;
+      }
+      if (contactInput) contactInput.value = pOpt.value;
+      if (phoneInput) phoneInput.value = pOpt.dataset.telefono || '';
+      if (nuevoFlag) nuevoFlag.value = '0';
+      contactInput?.setAttribute('readonly', 'readonly');
+      phoneInput?.setAttribute('readonly', 'readonly');
+    };
+
+    sel.addEventListener('change', () => {
+      fillPicker();
+      applyContact();
+      const opt = sel.selectedOptions[0];
+      const punto = form.querySelector('[name="punto_referencia"]');
+      if (punto && opt?.dataset.ubicacion) punto.value = opt.dataset.ubicacion;
+    });
+    picker?.addEventListener('change', applyContact);
+    fillPicker();
+    if (autofill || withPicker) applyContact();
   });
 }
 
@@ -586,9 +658,10 @@ function renderHome() {
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
-      ${user.es_jefe ? actionCard('/citas', 'Programar citas', 'Agende visitas a su equipo.', 'salida') : ''}
-      ${user.es_jefe ? actionCard('/dashboard', 'Dashboard', 'Visitas y pendientes de su equipo.', 'solicitudes') : ''}
-      ${user.es_jefe ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
+      ${isJefe(user) ? actionCard('/citas', 'Programar citas', 'Agende visitas a su equipo.', 'salida') : ''}
+      ${isJefe(user) ? actionCard('/dashboard', 'Dashboard', 'Visitas y pendientes de su equipo.', 'solicitudes') : ''}
+      ${isJefe(user) ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
+      ${isJefe(user) ? actionCard('/solicitudes', 'Solicitudes del equipo', 'Aprobar o rechazar altas a cliente.', 'solicitudes') : ''}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
       ${actionCard('/cliente', 'Prospectos', 'Crear prospectos y pasarlos a cliente.', 'cliente')}
     </div>
@@ -778,6 +851,7 @@ function renderSalida() {
         contactValue: cita?.contacto || '',
         phoneValue: cita?.telefono || '',
         items: cita ? null : destinoItems,
+        withContactPicker: tipoDestino === 'cliente' && !cita,
       })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
@@ -812,19 +886,43 @@ function renderSalida() {
   }
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
+    const esNuevo = String(data._contacto_nuevo || '') === '1';
+    const clienteId = String(data._cliente_id || '').trim();
+    const nombreContacto = String(data.contacto_registro_salida || '').trim();
+    if (esNuevo && clienteId && nombreContacto) {
+      const guardar = confirm(
+        `¿Desea registrar «${nombreContacto}» como contacto nuevo de este cliente? Así aparecerá la próxima vez en la lista.`
+      );
+      if (guardar) {
+        addClientContact(
+          clienteId,
+          {
+            nombre: nombreContacto,
+            telefono: data.telefono_registro_salida || '',
+          },
+          session
+        );
+      }
+    }
+    const {
+      _contacto_picker: _p,
+      _cliente_id: _c,
+      _contacto_nuevo: _n,
+      ...payload
+    } = data;
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'registro_salidas',
-      ...data,
+      ...payload,
       latitud_registro_salidas: gps.latitud,
       longitud_registro_salidas: gps.longitud,
       gps_accuracy_salida: gps.accuracy,
     });
     const { salida } = createPendingSalida(
       {
-        ...data,
+        ...payload,
         latitud_registro_salidas: gps.latitud,
         longitud_registro_salidas: gps.longitud,
         gps_accuracy_salida: gps.accuracy,
@@ -1307,17 +1405,20 @@ function renderCartera() {
   let clients = getClientesDe(user);
   if (q) {
     clients = clients.filter((c) =>
-      `${c.nombre} ${c.codigo} ${c.contacto} ${c.telefono}`.toLowerCase().includes(q)
+      `${c.nombre} ${c.codigo} ${c.contacto} ${c.telefono} ${listClientContacts(c)
+        .map((x) => x.nombre)
+        .join(' ')}`.toLowerCase().includes(q)
     );
   }
   const editing = editId ? clients.find((c) => c.id === editId) : null;
+  const editingContacts = editing ? listClientContacts(editing) : [];
 
   app.innerHTML = shell(
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Mi cartera</p>
       <h2 class="mt-1 text-xl font-black text-slate-900">${clients.length} cliente${clients.length === 1 ? '' : 's'}</h2>
-      <p class="mt-1 text-sm text-slate-500">Actualice los datos de contacto de sus clientes. Cada cambio queda registrado.</p>
+      <p class="mt-1 text-sm text-slate-500">Agregue varios contactos por cliente; se precargan al registrar una salida.</p>
     </div>
     <form id="form-buscar-cartera" class="mb-3 flex gap-2">
       <input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Buscar cliente, código o contacto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500" />
@@ -1328,14 +1429,40 @@ function renderCartera() {
         ? `<section class="mb-4 rounded-2xl border border-red-100 bg-red-50/40 p-5">
       <h3 class="text-sm font-black text-slate-900">${escapeHtml(editing.nombre)}</h3>
       <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(editing.codigo || '')} ${editing.pais ? `· ${escapeHtml(editing.pais)}` : ''}</p>
-      <form id="form-contacto" class="mt-3 grid gap-3 sm:grid-cols-2">
-        ${field('Contacto', 'contacto', { required: false, value: editing.contacto || '' })}
-        ${field('Teléfono', 'telefono', { required: false, type: 'tel', value: editing.telefono || '' })}
-        ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel', value: editing.telefono_fijo || '' })}
-        ${field('Correo contacto', 'correo_contacto', { required: false, type: 'email', value: editing.correo_contacto || '' })}
+      <div class="mt-3 space-y-2">
+        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-500">Contactos registrados</p>
+        ${
+          editingContacts.length
+            ? editingContacts
+                .map((ct) => {
+                  const removable = (editing.contactos || []).some((x) => x.id === ct.id);
+                  return `
+          <div class="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold text-slate-900">${escapeHtml(ct.nombre)}${ct.cargo ? ` <span class="text-xs font-normal text-slate-400">(${escapeHtml(ct.cargo)})</span>` : ''}</div>
+              <div class="text-xs text-slate-500">${escapeHtml([ct.telefono, ct.telefono_fijo, ct.correo].filter(Boolean).join(' · ') || 'Sin datos')}</div>
+            </div>
+            ${
+              removable
+                ? `<button type="button" data-remove-contact="${escapeHtml(ct.id)}" class="shrink-0 text-[11px] font-bold text-slate-400 hover:text-red-600">Quitar</button>`
+                : ''
+            }
+          </div>`;
+                })
+                .join('')
+            : '<p class="text-sm text-slate-400">Aún no hay contactos. Agregue el primero abajo.</p>'
+        }
+      </div>
+      <form id="form-contacto" class="mt-4 grid gap-3 sm:grid-cols-2">
+        <p class="sm:col-span-2 text-xs font-bold uppercase tracking-wider text-red-700">+ Agregar contacto</p>
+        ${field('Nombre', 'nombre', { required: true, placeholder: 'Persona de contacto' })}
+        ${field('Cargo', 'cargo', { required: false, placeholder: 'Ej. GG, GO, compras' })}
+        ${field('Teléfono', 'telefono', { required: false, type: 'tel' })}
+        ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel' })}
+        ${field('Correo', 'correo', { required: false, type: 'email' })}
         <div class="flex gap-2 sm:col-span-2">
-          <button class="flex-1 rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Guardar</button>
-          <button type="button" id="btn-cancel-contacto" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600">Cancelar</button>
+          <button class="flex-1 rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Agregar contacto</button>
+          <button type="button" id="btn-cancel-contacto" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600">Cerrar</button>
         </div>
       </form>
     </section>`
@@ -1345,16 +1472,17 @@ function renderCartera() {
       ${
         clients.length
           ? clients
-              .map(
-                (c) => `
+              .map((c) => {
+                const cts = listClientContacts(c);
+                return `
         <div class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-black text-slate-900">${escapeHtml(c.nombre)}</div>
-            <div class="mt-0.5 truncate text-xs text-slate-500">${escapeHtml(c.codigo || 'Sin código')}${c.contacto ? ` · ${escapeHtml(c.contacto)}` : ' · Sin contacto'}${c.telefono ? ` · ${escapeHtml(c.telefono)}` : ''}</div>
+            <div class="mt-0.5 truncate text-xs text-slate-500">${escapeHtml(c.codigo || 'Sin código')} · ${cts.length} contacto${cts.length === 1 ? '' : 's'}${cts[0] ? ` · ${escapeHtml(cts[0].nombre)}` : ''}</div>
           </div>
-          <button data-edit-contact="${c.id}" class="shrink-0 text-xs font-bold text-red-600 hover:underline">Editar</button>
-        </div>`
-              )
+          <button data-edit-contact="${c.id}" class="shrink-0 text-xs font-bold text-red-600 hover:underline">Contactos</button>
+        </div>`;
+              })
               .join('')
           : '<p class="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-400">Sin clientes en su cartera.</p>'
       }
@@ -1372,21 +1500,30 @@ function renderCartera() {
     btn.addEventListener('click', () => go(`/cartera?edit=${encodeURIComponent(btn.dataset.editContact)}`));
   });
   document.getElementById('btn-cancel-contacto')?.addEventListener('click', () => go('/cartera'));
+  document.querySelectorAll('[data-remove-contact]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!editing || !confirm('¿Quitar este contacto de la lista?')) return;
+      removeClientContact(editing.id, btn.dataset.removeContact, getState().session);
+      showToast('Contacto eliminado.');
+      go(`/cartera?edit=${encodeURIComponent(editing.id)}`, { replace: true, animate: false });
+    });
+  });
   document.getElementById('form-contacto')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const { changed } = updateClientContact(
+    const { added } = addClientContact(
       editing.id,
       {
-        contacto: fd.get('contacto'),
+        nombre: fd.get('nombre'),
+        cargo: fd.get('cargo'),
         telefono: fd.get('telefono'),
         telefono_fijo: fd.get('telefono_fijo'),
-        correo_contacto: fd.get('correo_contacto'),
+        correo: fd.get('correo'),
       },
       getState().session
     );
-    showToast(changed ? 'Contacto actualizado y registrado.' : 'Sin cambios.');
-    go('/cartera');
+    showToast(added ? 'Contacto agregado.' : 'Ese contacto ya existía o no se pudo guardar.');
+    go(`/cartera?edit=${encodeURIComponent(editing.id)}`, { replace: true, animate: false });
   });
 }
 
@@ -1652,6 +1789,12 @@ function renderAdminConfig() {
           type: 'email',
           placeholder: 'ventas@red.com.sv',
         })}
+        ${field('API key de lectura (export)', 'export_api_key', {
+          value: state.export_api_key || '',
+          required: false,
+          placeholder: 'Clave para /api/export/* (header X-API-Key)',
+        })}
+        <p class="text-[11px] text-slate-400">Documentación de la API de lectura en el README del repositorio. Endpoints: <code class="rounded bg-slate-100 px-1">/api/export/clients</code>, <code class="rounded bg-slate-100 px-1">salidas</code>, <code class="rounded bg-slate-100 px-1">citas</code>, <code class="rounded bg-slate-100 px-1">resumen</code>.</p>
         <button class="inline-flex items-center justify-center rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase tracking-tight text-white transition hover:bg-red-700">Guardar configuración</button>
       </form>
     </section>
@@ -1667,6 +1810,7 @@ function renderAdminConfig() {
       catalogoClientesActivo: fd.get('catalogoClientesActivo') === 'on',
       webhookUrl: fd.get('webhookUrl'),
       correo_ventas: fd.get('correo_ventas'),
+      export_api_key: fd.get('export_api_key'),
     });
     showToast('Configuración guardada.');
     render();
@@ -1750,10 +1894,23 @@ function renderAdminBaseDatos() {
         ? `
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h4 class="text-sm font-black text-slate-900">Importar Excel</h4>
-      <p class="mt-1 text-xs text-slate-500">Columnas A–H: País, Código, Cliente, Ejecutivo, GG Nombre/Tel/Celular/Correo. Crea perfiles stub y asigna cartera. Omite Intelfon Guatemala.</p>
-      <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <input id="file-clients" type="file" accept=".csv,.xlsx,.xls" class="w-full flex-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm" />
-        <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
+      <p class="mt-1 text-xs text-slate-500">Mismas columnas del archivo de cartera (País, Código, Cliente, Ejecutivo, GG/GO/GF…). Omite Intelfon Guatemala.</p>
+      <div class="mt-4 space-y-3">
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+          <p class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Modo de carga</p>
+          <label class="mb-2 flex cursor-pointer items-start gap-2">
+            <input type="radio" name="import-mode" value="merge" checked class="mt-1" />
+            <span><strong>Agregar / actualizar</strong> — suma filas nuevas y completa contactos faltantes sin borrar la base actual.</span>
+          </label>
+          <label class="flex cursor-pointer items-start gap-2">
+            <input type="radio" name="import-mode" value="replace" class="mt-1" />
+            <span><strong>Reemplazar</strong> — elimina la cartera de clientes (no prospectos) y carga solo lo del archivo.</span>
+          </label>
+        </div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <input id="file-clients" type="file" accept=".csv,.xlsx,.xls" class="w-full flex-1 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm" />
+          <button id="btn-import-clients" class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase tracking-tight text-white hover:bg-slate-800">Importar</button>
+        </div>
       </div>
       <p id="import-status" class="mt-2 text-xs text-slate-500"></p>
       <p class="mt-3 text-[11px] text-slate-400">Los ejecutivos nuevos nacen con clave temporal: asigne correos y claves en Usuarios.</p>
@@ -1929,12 +2086,38 @@ function renderAdminBaseDatos() {
       showToast('Seleccione un archivo Excel o CSV.', 'err');
       return;
     }
+    const mode =
+      document.querySelector('input[name="import-mode"]:checked')?.value === 'replace'
+        ? 'replace'
+        : 'merge';
     status.textContent = 'Procesando archivo…';
     try {
       const { rows, omitted } = await parseClientFile(file);
-      const result = importClients(rows, { omittedFile: omitted });
+      const currentCount = getState().clients.filter((c) => c.tipo !== 'prospecto').length;
+      if (rows.length < currentCount) {
+        const ok = confirm(
+          `Atención: el archivo tiene ${rows.length} fila(s) y la base actual tiene ${currentCount} cliente(s).\n\n` +
+            (mode === 'replace'
+              ? 'Con «Reemplazar» se eliminarán los clientes que no vengan en el archivo.\n\n¿Continuar?'
+              : 'Con «Agregar» solo se sumarán o actualizarán esas filas; el resto de la base se conserva.\n\n¿Continuar?')
+        );
+        if (!ok) {
+          status.textContent = 'Importación cancelada.';
+          return;
+        }
+      }
+      if (mode === 'replace') {
+        const okReplace = confirm(
+          `¿Reemplazar toda la cartera (${currentCount} clientes) por las ${rows.length} filas del archivo? Los prospectos se conservan.`
+        );
+        if (!okReplace) {
+          status.textContent = 'Importación cancelada.';
+          return;
+        }
+      }
+      const result = importClients(rows, { omittedFile: omitted, mode });
       showToast(
-        `Listo: ${result.added} nuevos, ${result.updated} actualizados, ${result.usersCreated} ejecutivos, ${result.skipped} omitidos.`
+        `Listo (${result.mode}): ${result.added} nuevos, ${result.updated} actualizados, ${result.usersCreated} ejecutivos, ${result.skipped} omitidos. Base: ${result.beforeClients} → ${result.afterClients}.`
       );
       go('/admin/base-datos?view=ejecutivos');
     } catch (err) {
@@ -2124,14 +2307,15 @@ function renderAdminHistorial(basePath = '/admin/historial') {
   document.getElementById('filter-fecha-hist')?.addEventListener('change', apply);
 }
 
-function renderAdminSolicitudes() {
+function renderAdminSolicitudes(basePath = '/admin/solicitudes') {
   const state = getState();
+  const isAdminView = basePath.startsWith('/admin');
   const pendingReqs = state.clientRequests.filter((r) => r.estado === 'pendiente');
   app.innerHTML = shell(
     `
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Solicitudes</h3>
-      <p class="mt-1 text-xs text-slate-500">Apruebe o rechace altas pedidas por vendedores.</p>
+      <p class="mt-1 text-xs text-slate-500">${isAdminView ? 'Apruebe o rechace altas pedidas por vendedores.' : 'Altas a cliente pedidas por su equipo.'}</p>
       <div class="mt-4 space-y-3">
         ${
           pendingReqs.length
@@ -2154,9 +2338,10 @@ function renderAdminSolicitudes() {
       </div>
     </section>
     `,
-    { title: 'Solicitudes', showBack: true, backTo: '/admin' }
+    { title: 'Solicitudes', showBack: true, backTo: isAdminView ? '/admin' : '/' }
   );
-  bindAdminSubShell();
+  if (isAdminView) bindAdminSubShell();
+  else bindShell('/');
   document.querySelectorAll('[data-approve]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const req = getState().clientRequests.find((r) => r.id === btn.dataset.approve);
@@ -2397,7 +2582,7 @@ function renderAdminUsuarios() {
           ${field('Correo jefe', 'correo_jefe', { type: 'email', required: false })}
           ${field('Rol', 'rol', {
             type: 'select',
-            value: `<option value="vendedor">Vendedor</option><option value="admin">Admin</option>`,
+            value: `<option value="vendedor">Vendedor</option><option value="jefe">Jefe de ventas</option><option value="admin">Admin</option>`,
           })}
           <div class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:col-span-2">
             <span class="text-sm font-bold text-slate-800">Usuario activo (puede iniciar sesión)</span>
@@ -2631,7 +2816,8 @@ function render() {
     return;
   }
 
-  if (!user || user.rol !== 'vendedor') {
+  const isSellerSide = user?.rol === 'vendedor' || user?.rol === 'jefe';
+  if (!user || !isSellerSide) {
     if (user?.rol === 'admin') {
       go('/admin', { replace: true, animate: false });
       return;
@@ -2657,21 +2843,28 @@ function render() {
       renderCartera();
       break;
     case '/historial':
-      if (!user.es_jefe) {
+      if (!isJefe(user)) {
         go('/', { replace: true, animate: false });
         return;
       }
       renderAdminHistorial('/historial');
       break;
+    case '/solicitudes':
+      if (!isJefe(user)) {
+        go('/', { replace: true, animate: false });
+        return;
+      }
+      renderAdminSolicitudes('/solicitudes');
+      break;
     case '/citas':
-      if (!user.es_jefe) {
+      if (!isJefe(user)) {
         go('/', { replace: true, animate: false });
         return;
       }
       renderCitas();
       break;
     case '/dashboard':
-      if (!user.es_jefe) {
+      if (!isJefe(user)) {
         go('/', { replace: true, animate: false });
         return;
       }

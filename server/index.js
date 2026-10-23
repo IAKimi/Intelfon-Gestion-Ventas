@@ -177,6 +177,20 @@ async function migrate() {
     ALTER TABLE app_state
     ADD COLUMN IF NOT EXISTS citas JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
+  await pool.query(`
+    ALTER TABLE app_state
+    ADD COLUMN IF NOT EXISTS export_api_key TEXT NOT NULL DEFAULT ''
+  `);
+
+  // Permite rol jefe de ventas.
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_rol_check;
+      ALTER TABLE users ADD CONSTRAINT users_rol_check
+        CHECK (rol IN ('admin', 'vendedor', 'jefe'));
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
+  `);
 
   await pool.query(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS transporte_default TEXT NOT NULL DEFAULT ''
@@ -254,7 +268,7 @@ async function getAppPayload(sessionUser = null, full = false) {
   );
   const users = allUsers.map((u) => ({
     ...u,
-    es_jefe: jefeCorreos.has(String(u.correo || '').toLowerCase()),
+    es_jefe: u.rol === 'jefe' || jefeCorreos.has(String(u.correo || '').toLowerCase()),
   }));
 
   let clients = s.clients || [];
@@ -282,7 +296,9 @@ async function getAppPayload(sessionUser = null, full = false) {
     clients = clients.filter(
       (c) => c.vendedorId === sessionUser.id || (isJefe && teamIds.has(c.vendedorId))
     );
-    clientRequests = clientRequests.filter((r) => r.vendedorId === sessionUser.id);
+    clientRequests = clientRequests.filter(
+      (r) => r.vendedorId === sessionUser.id || (isJefe && teamIds.has(r.vendedorId))
+    );
     contactChanges = contactChanges.filter((x) => teamIds.has(x.vendedorId));
     notifications = notifications.filter((n) => n.userId === sessionUser.id);
     salidas = salidas.filter((x) => (isJefe ? teamIds.has(x.vendedorId) : x.vendedorId === sessionUser.id));
@@ -307,6 +323,7 @@ async function getAppPayload(sessionUser = null, full = false) {
     notifications,
     salidas,
     citas,
+    export_api_key: sessionUser?.rol === 'admin' ? s.export_api_key || '' : '',
     users: visibleUsers,
     session: sessionUser
       ? users.find((u) => u.id === sessionUser.id) || publicUser(sessionUser)
@@ -389,8 +406,14 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user || !user.activo) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
-    if (expectedRole && user.rol !== expectedRole) {
-      return res.status(401).json({ error: 'Sin acceso para este rol' });
+    if (expectedRole) {
+      const ok =
+        expectedRole === 'admin'
+          ? user.rol === 'admin'
+          : expectedRole === 'vendedor'
+            ? user.rol === 'vendedor' || user.rol === 'jefe'
+            : user.rol === expectedRole;
+      if (!ok) return res.status(401).json({ error: 'Sin acceso para este rol' });
     }
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
@@ -424,7 +447,14 @@ app.get('/api/state', requireAuth, async (req, res) => {
   }
 });
 
-const CONTACT_KEYS = ['contacto', 'telefono', 'telefono_fijo', 'correo_contacto'];
+const CONTACT_KEYS = [
+  'contacto',
+  'telefono',
+  'telefono_fijo',
+  'correo_contacto',
+  'contacto_rol',
+  'contactos',
+];
 
 /** Vendedor: contacto de sus clientes + alta libre de prospectos propios. */
 function mergeSellerClientContacts(currentClients, submitted, userId) {
@@ -435,7 +465,7 @@ function mergeSellerClientContacts(currentClients, submitted, userId) {
     if (!next || c.vendedorId !== userId) return c;
     const out = { ...c };
     for (const k of CONTACT_KEYS) {
-      if (k in next) out[k] = String(next[k] || '').trim();
+      if (k in next) out[k] = next[k];
     }
     return out;
   });
@@ -464,13 +494,24 @@ function mergeSellerSalidas(currentSalidas, submitted, userId) {
   return [...byId.values()];
 }
 
-/** Vendedor: crea solicitudes propias en pendiente; no resuelve ni toca ajenas. */
-function mergeSellerClientRequests(currentReqs, submitted, userId) {
+/** Vendedor crea solicitudes; jefe puede aprobar/rechazar las de su equipo. */
+function mergeSellerClientRequests(currentReqs, submitted, user, allUsers) {
   if (!Array.isArray(submitted)) return currentReqs || [];
+  const userId = user.id;
+  const teamIds = teamIdsOf(user, allUsers);
+  teamIds.add(userId);
+  const isBoss = user.rol === 'jefe' || Boolean(user.es_jefe);
   const byId = new Map((currentReqs || []).map((x) => [x.id, x]));
   for (const item of submitted) {
-    if (!item?.id || byId.has(item.id)) continue;
-    if (item.vendedorId === userId) byId.set(item.id, { ...item, estado: 'pendiente' });
+    if (!item?.id) continue;
+    const existing = byId.get(item.id);
+    if (!existing) {
+      if (item.vendedorId === userId) byId.set(item.id, { ...item, estado: 'pendiente' });
+      continue;
+    }
+    if (isBoss && teamIds.has(existing.vendedorId) && item.estado && item.estado !== existing.estado) {
+      byId.set(item.id, { ...existing, ...item, vendedorId: existing.vendedorId });
+    }
   }
   return [...byId.values()];
 }
@@ -605,7 +646,15 @@ app.put('/api/state', requireAuth, async (req, res) => {
         ? Array.isArray(body.clientRequests)
           ? body.clientRequests
           : current.clientRequests
-        : mergeSellerClientRequests(current.clientRequests, body.clientRequests, req.user.id),
+        : mergeSellerClientRequests(
+            current.clientRequests,
+            body.clientRequests,
+            current.session || req.user,
+            current.users
+          ),
+      export_api_key: isAdmin
+        ? String(body.export_api_key ?? current.export_api_key ?? '').trim()
+        : current.export_api_key || '',
       notifications: isAdmin
         ? Array.isArray(body.notifications)
           ? body.notifications
@@ -641,6 +690,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         salidas = $9::jsonb,
         contact_changes = $10::jsonb,
         citas = $11::jsonb,
+        export_api_key = $12,
         updated_at = NOW()
        WHERE id = 1`,
       [
@@ -655,6 +705,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
         JSON.stringify(next.salidas),
         JSON.stringify(next.contactChanges || []),
         JSON.stringify(next.citas || []),
+        next.export_api_key || '',
       ]
     );
 
@@ -682,7 +733,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
               u.sucursal || '',
               u.correo || '',
               u.correo_jefe || '',
-              u.rol === 'admin' ? 'admin' : 'vendedor',
+              u.rol === 'admin' ? 'admin' : u.rol === 'jefe' ? 'jefe' : 'vendedor',
               u.combustible_activo !== false,
               u.activo !== false,
               JSON.stringify(u.tipos_salida || []),
@@ -702,7 +753,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
             u.sucursal || '',
             u.correo || '',
             u.correo_jefe || '',
-            u.rol === 'admin' ? 'admin' : 'vendedor',
+            u.rol === 'admin' ? 'admin' : u.rol === 'jefe' ? 'jefe' : 'vendedor',
             u.combustible_activo !== false,
             u.activo !== false,
             JSON.stringify(u.tipos_salida || []),
@@ -754,6 +805,86 @@ app.put('/api/state', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'No se pudo guardar' });
+  }
+});
+
+async function requireExportKey(req, res, next) {
+  const key = String(
+    req.headers['x-api-key'] ||
+      (String(req.headers.authorization || '').startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : '') ||
+      ''
+  ).trim();
+  if (!key) return res.status(401).json({ error: 'API key requerida (header X-API-Key)' });
+  const envKey = String(process.env.EXPORT_API_KEY || '').trim();
+  const { rows } = await pool.query('SELECT export_api_key FROM app_state WHERE id = 1');
+  const dbKey = String(rows[0]?.export_api_key || '').trim();
+  if ((envKey && key === envKey) || (dbKey && key === dbKey)) return next();
+  return res.status(403).json({ error: 'API key inválida' });
+}
+
+app.get('/api/export/clients', requireExportKey, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT clients FROM app_state WHERE id = 1');
+    res.json({ ok: true, clients: rows[0]?.clients || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/export/salidas', requireExportKey, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT salidas FROM app_state WHERE id = 1');
+    res.json({ ok: true, salidas: rows[0]?.salidas || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/export/citas', requireExportKey, async (_req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT citas FROM app_state WHERE id = 1');
+    res.json({ ok: true, citas: rows[0]?.citas || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/export/resumen', requireExportKey, async (_req, res) => {
+  try {
+    const payload = await getAppPayload(null, true);
+    const ejecutivos = payload.users.filter((u) => u.rol === 'vendedor' || u.rol === 'jefe');
+    res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      totales: {
+        usuarios: payload.users.length,
+        ejecutivos: ejecutivos.length,
+        clientes: (payload.clients || []).filter((c) => c.tipo !== 'prospecto').length,
+        prospectos: (payload.clients || []).filter((c) => c.tipo === 'prospecto').length,
+        salidas: (payload.salidas || []).length,
+        visitadas: (payload.salidas || []).filter((s) => s.estado === 'visitada').length,
+        pendientes: (payload.salidas || []).filter((s) => s.estado === 'pendiente').length,
+        citas: (payload.citas || []).length,
+      },
+      porEjecutivo: ejecutivos.map((u) => {
+        const salidas = (payload.salidas || []).filter((s) => s.vendedorId === u.id);
+        return {
+          id: u.id,
+          nombre: u.nombre,
+          pais: u.pais,
+          clientes: (payload.clients || []).filter(
+            (c) => c.vendedorId === u.id && c.tipo !== 'prospecto'
+          ).length,
+          salidas: salidas.length,
+          visitadas: salidas.filter((s) => s.estado === 'visitada').length,
+          pendientes: salidas.filter((s) => s.estado === 'pendiente').length,
+        };
+      }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
