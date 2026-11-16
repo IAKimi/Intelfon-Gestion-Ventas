@@ -12,7 +12,7 @@ export class LocationError extends Error {
   }
 }
 
-/** @type {'unknown'|'granted'|'denied'|'prompt'|'unavailable'|'insecure'|'unsupported'} */
+/** @type {'unknown'|'granted'|'denied'|'prompt'|'unavailable'|'insecure'|'unsupported'|'timeout'} */
 let status = 'unknown';
 /** @type {{ latitud: string, longitud: string, accuracy: number|null, at: string } | null} */
 let lastFix = null;
@@ -64,11 +64,7 @@ function mapGeoError(err) {
   );
 }
 
-/**
- * Solicita una lectura GPS fresca.
- * @param {{ timeout?: number, maximumAge?: number, enableHighAccuracy?: boolean }} [opts]
- */
-export function getGps(opts = {}) {
+function requestPosition(opts = {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       status = 'unsupported';
@@ -105,12 +101,44 @@ export function getGps(opts = {}) {
         reject(mapped);
       },
       {
-        enableHighAccuracy: opts.enableHighAccuracy !== false,
-        timeout: opts.timeout ?? 15000,
-        maximumAge: opts.maximumAge ?? 0,
+        enableHighAccuracy: Boolean(opts.enableHighAccuracy),
+        timeout: opts.timeout ?? 20000,
+        maximumAge: opts.maximumAge ?? 60000,
       }
     );
   });
+}
+
+/**
+ * Solicita una lectura de ubicación.
+ * En PC prioriza red/Wi‑Fi (rápido). Si falla, intenta una vez con más precisión.
+ * @param {{ timeout?: number, maximumAge?: number, enableHighAccuracy?: boolean }} [opts]
+ */
+export async function getGps(opts = {}) {
+  const forceHigh = opts.enableHighAccuracy === true;
+  const timeout = opts.timeout ?? 20000;
+  const maximumAge = opts.maximumAge ?? 60000;
+
+  if (forceHigh) {
+    return requestPosition({ enableHighAccuracy: true, timeout, maximumAge });
+  }
+
+  try {
+    return await requestPosition({
+      enableHighAccuracy: false,
+      timeout: Math.min(timeout, 18000),
+      maximumAge,
+    });
+  } catch (err) {
+    if (err?.code === 'denied' || err?.code === 'unsupported' || err?.code === 'insecure') {
+      throw err;
+    }
+    return requestPosition({
+      enableHighAccuracy: true,
+      timeout: Math.max(timeout, 25000),
+      maximumAge: 0,
+    });
+  }
 }
 
 /**
@@ -147,7 +175,7 @@ export async function ensureLocationAccess() {
         return {
           ok: false,
           error: new LocationError(
-            'La ubicación está bloqueada para este sitio. En el candado o información del sitio, permita la ubicación y vuelva a intentar.',
+            'La ubicación está bloqueada para este sitio. En el candado o la información del sitio, permita la ubicación y vuelva a intentar.',
             'denied'
           ),
         };
@@ -159,7 +187,7 @@ export async function ensureLocationAccess() {
   }
 
   try {
-    const fix = await getGps({ timeout: 20000 });
+    const fix = await getGps({ timeout: 22000, maximumAge: 120000, enableHighAccuracy: false });
     return { ok: true, fix };
   } catch (err) {
     return {
@@ -183,14 +211,16 @@ export function locationBannerHtml() {
 
   const messages = {
     denied:
-      'No dio permiso de ubicación. Sin eso no se pueden registrar salidas ni visitas.',
+      'No dio permiso de ubicación. Sin eso no se pueden registrar salidas ni visitas. Use el candado del navegador → Ubicación → Permitir.',
     insecure:
       'Este sitio está en HTTP y el navegador bloquea el GPS. Use HTTPS o active la ubicación cuando el navegador lo permita.',
     unsupported: 'Este dispositivo no soporta geolocalización.',
-    unavailable: 'Active el GPS del teléfono para continuar.',
-    timeout: 'No se obtuvo GPS a tiempo. Active la ubicación e intente de nuevo.',
-    prompt: 'Se necesita acceso a su ubicación para registrar operaciones.',
-    unknown: 'Active la ubicación para poder registrar salidas y visitas.',
+    unavailable:
+      'No hay señal de ubicación. En computadora active “Ubicación” de Windows y permita el sitio; en celular active el GPS.',
+    timeout:
+      'No se obtuvo ubicación a tiempo. En PC a veces tarda: pulse «Activar ubicación» de nuevo o use el celular.',
+    prompt: 'Se necesita acceso a su ubicación solo para registrar salidas y visitas.',
+    unknown: 'Active la ubicación para poder registrar salidas y visitas. El resto del panel sí se puede usar.',
   };
 
   const text = messages[status] || messages.unknown;
@@ -199,8 +229,9 @@ export function locationBannerHtml() {
       <div class="flex items-start gap-3">
         <span class="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500"></span>
         <div class="min-w-0 flex-1">
-          <div class="text-sm font-bold text-amber-950">Ubicación requerida</div>
+          <div class="text-sm font-bold text-amber-950">Ubicación pendiente</div>
           <p class="mt-0.5 text-xs text-amber-900/80">${text}</p>
+          <p class="mt-1 text-[11px] text-amber-800/70">Puede usar cartera, citas y dashboard. Solo salida y visita requieren GPS.</p>
           <button type="button" id="btn-enable-gps" class="mt-3 inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">
             Activar ubicación
           </button>

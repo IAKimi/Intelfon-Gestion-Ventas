@@ -167,11 +167,6 @@ async function requestLocationFromUi({ silentOk = false, busyMessage } = {}) {
       onAction: err?.code === 'denied' || err?.code === 'insecure' ? null : () => requestLocationFromUi(),
       duration: 9000,
     });
-    if (err?.code === 'denied') {
-      window.alert(
-        'Sin permiso de ubicación no se pueden registrar salidas ni visitas.\n\nEn el navegador: toque el candado o la información del sitio → Permisos → Ubicación → Permitir, y luego pulse «Activar ubicación».'
-      );
-    }
     return false;
   } finally {
     hideGpsBusy();
@@ -185,28 +180,19 @@ function bindGpsBanner() {
   });
 }
 
-async function ensureSellerLocationGate() {
-  if (locationPrompted && hasUsableLocation()) return true;
+/** Intento suave al entrar: no bloquea el panel ni muestra alertas. */
+async function softPromptLocation() {
+  if (hasUsableLocation()) return true;
   locationPrompted = true;
-  showGpsBusy('Activando ubicación…');
-  try {
-    const result = await ensureLocationAccess();
-    if (result.ok) return true;
-    const err = result.error;
-    window.alert(
-      `${err?.message || 'Se requiere ubicación.'}\n\nSin ubicación activa no podrá registrar salidas ni visitas.`
-    );
-    return false;
-  } finally {
-    hideGpsBusy();
-  }
+  const result = await ensureLocationAccess();
+  return Boolean(result.ok);
 }
 
 async function requireGpsOrPrompt() {
   if (hasUsableLocation()) {
-    showGpsBusy('Capturando GPS…');
+    showGpsBusy('Capturando ubicación…');
     try {
-      return await getGps({ maximumAge: 30000, timeout: 12000 });
+      return await getGps({ maximumAge: 120000, timeout: 18000, enableHighAccuracy: false });
     } catch {
       /* cae a reintento interactivo */
     } finally {
@@ -219,13 +205,13 @@ async function requireGpsOrPrompt() {
   });
   if (!ok) {
     throw new LocationError(
-      'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
+      'No se pudo obtener la ubicación. En PC active Ubicación de Windows, permita el sitio y reintente.',
       getLocationStatus() === 'denied' ? 'denied' : 'unavailable'
     );
   }
-  showGpsBusy('Capturando GPS…');
+  showGpsBusy('Capturando ubicación…');
   try {
-    return await getGps({ maximumAge: 5000, timeout: 15000 });
+    return await getGps({ maximumAge: 30000, timeout: 20000, enableHighAccuracy: false });
   } finally {
     hideGpsBusy();
   }
@@ -370,8 +356,6 @@ function renderLogin() {
         go('/admin', { replace: true });
         return;
       }
-      if (btn) btn.textContent = 'Solicitando ubicación…';
-      await ensureSellerLocationGate();
       go('/', { replace: true });
     } finally {
       if (btn) {
@@ -617,14 +601,16 @@ function renderHome() {
       </div>
     </div>
 
-    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4 ${gpsOk ? '' : 'opacity-60'}">
-      ${actionCard('/salida', 'Registro de salida', 'Punto de partida y destino.', 'salida')}
+    <div class="stagger grid grid-cols-2 gap-3 sm:gap-4">
+      ${actionCard('/salida', 'Registro de salida', gpsOk ? 'Punto de partida y destino.' : 'Requiere ubicación al guardar.', 'salida')}
       ${actionCard(
         '/visita',
         'Reporte de visita',
         pendingVisitas
           ? `${pendingVisitas} pendiente${pendingVisitas > 1 ? 's' : ''} por reportar.`
-          : 'Elija una salida pendiente.',
+          : gpsOk
+            ? 'Elija una salida pendiente.'
+            : 'Requiere ubicación al cerrar la visita.',
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
@@ -683,20 +669,8 @@ function renderHome() {
   });
 
   if (!locationPrompted) {
-    locationPrompted = true;
-    void ensureLocationAccess().then((result) => {
-      if (!result.ok && result.error) {
-        showToast(result.error.message, 'err', {
-          actionLabel: 'Activar ubicación',
-          onAction: async () => {
-            const ok = await requestLocationFromUi();
-            if (ok) render();
-          },
-          duration: 10000,
-        });
-      } else if (result.ok) {
-        render();
-      }
+    void softPromptLocation().then((ok) => {
+      if (ok) render();
     });
   }
 }

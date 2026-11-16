@@ -100,6 +100,22 @@ const EXEC_MAP = {
     pais: 'GT',
     cargo: 'Ejecutivo de Ventas',
   },
+  'david morataya': {
+    correo: 'DMORATAYA@red.com.gt',
+    nombre: 'David Morataya',
+    pais: 'GT',
+    cargo: 'Ejecutivo de Ventas',
+    usuario: 'DMORATAYA',
+    password: 'DMORATAYA123',
+  },
+  'joel cifuentes': {
+    correo: 'JCIFUNTES@red.com.gt',
+    nombre: 'Joel Cifuentes',
+    pais: 'GT',
+    cargo: 'Ejecutivo de Ventas',
+    usuario: 'JCIFUNTES',
+    password: 'JCIFUNTES123',
+  },
 };
 
 function normName(s) {
