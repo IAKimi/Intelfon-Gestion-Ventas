@@ -679,7 +679,7 @@ function findOrCreateEjecutivo(state, nombre, pais) {
     correo_jefe: '',
     rol: 'vendedor',
     pais: country,
-    combustible_activo: true,
+    combustible_activo: false,
     activo: true,
     tipos_salida: [],
     tipos_visita: [],
