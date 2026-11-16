@@ -51,6 +51,7 @@ import {
   ensureLocationAccess,
   getLocationStatus,
   hasUsableLocation,
+  isLikelyDesktop,
   locationBannerHtml,
   LocationError,
 } from './location.js';
@@ -131,11 +132,14 @@ function showGpsBusy(message = 'Obteniendo ubicación…') {
   el.setAttribute('role', 'alertdialog');
   el.setAttribute('aria-busy', 'true');
   el.setAttribute('aria-live', 'assertive');
+  const hint = isLikelyDesktop()
+    ? 'En computadora puede tardar 20–40 s. Si el navegador pide permiso, pulse Permitir.'
+    : 'Espere un momento. No toque la pantalla hasta que termine.';
   el.innerHTML = `
     <div class="gps-busy-card">
       <div class="gps-busy-spinner" aria-hidden="true"></div>
       <div class="text-sm font-black text-slate-900">${escapeHtml(message)}</div>
-      <p class="mt-2 text-xs leading-relaxed text-slate-500">Espere un momento. No toque la pantalla hasta que termine.</p>
+      <p class="mt-2 text-xs leading-relaxed text-slate-500">${escapeHtml(hint)}</p>
     </div>`;
   el.addEventListener(
     'touchmove',
@@ -189,10 +193,13 @@ async function softPromptLocation() {
 }
 
 async function requireGpsOrPrompt() {
+  const desktop = isLikelyDesktop();
+  const softAge = desktop ? 300000 : 120000;
+  const softTimeout = desktop ? 45000 : 20000;
   if (hasUsableLocation()) {
     showGpsBusy('Capturando ubicación…');
     try {
-      return await getGps({ maximumAge: 120000, timeout: 18000, enableHighAccuracy: false });
+      return await getGps({ maximumAge: softAge, timeout: softTimeout, enableHighAccuracy: false });
     } catch {
       /* cae a reintento interactivo */
     } finally {
@@ -201,17 +208,23 @@ async function requireGpsOrPrompt() {
   }
   const ok = await requestLocationFromUi({
     silentOk: true,
-    busyMessage: 'Activando ubicación…',
+    busyMessage: desktop ? 'Activando ubicación (PC)…' : 'Activando ubicación…',
   });
   if (!ok) {
     throw new LocationError(
-      'No se pudo obtener la ubicación. En PC active Ubicación de Windows, permita el sitio y reintente.',
+      desktop
+        ? 'No se pudo obtener la ubicación en la PC. Active Ubicación de Windows, permita el sitio en el candado y reintente.'
+        : 'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
       getLocationStatus() === 'denied' ? 'denied' : 'unavailable'
     );
   }
   showGpsBusy('Capturando ubicación…');
   try {
-    return await getGps({ maximumAge: 30000, timeout: 20000, enableHighAccuracy: false });
+    return await getGps({
+      maximumAge: desktop ? 120000 : 30000,
+      timeout: desktop ? 45000 : 25000,
+      enableHighAccuracy: false,
+    });
   } finally {
     hideGpsBusy();
   }
@@ -414,7 +427,7 @@ function clientFieldsHtml({
 
   if (freeForm || (!isCatalogoClientesActivo() && !items)) {
     return `
-      ${field('Cliente / prospecto', nameField, { placeholder: 'Nombre de la empresa o cliente', value: selected })}
+      ${field('Cliente', nameField, { placeholder: 'Nombre de la empresa o cliente', value: selected })}
       ${field(contactLabel, contactField, { placeholder: 'Persona de contacto', required: false, value: contactValue })}
       ${phoneBlock}
     `;
@@ -619,7 +632,6 @@ function renderHome() {
       ${isJefe(user) ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
       ${isJefe(user) ? actionCard('/solicitudes', 'Solicitudes del equipo', 'Aprobar o rechazar altas a cliente.', 'solicitudes') : ''}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
-      ${actionCard('/cliente', 'Prospectos', 'Crear prospectos y pasarlos a cliente.', 'cliente')}
     </div>
     ${(() => {
       const citas = getCitasForUser(user.id)
@@ -752,19 +764,14 @@ function renderSalida() {
   const citaRaw = citaId ? getCitaById(citaId) : null;
   const cita =
     citaRaw && citaRaw.vendedorId === user.id && citaRaw.estado === 'programada' ? citaRaw : null;
-  const tipoDestino = cita
-    ? 'cliente'
-    : new URLSearchParams(location.search).get('tipo') === 'prospecto'
-      ? 'prospecto'
-      : 'cliente';
-  const destinoItems = tipoDestino === 'prospecto' ? getProspectosDe(user) : getClientesDe(user);
+  const destinoItems = getClientesDe(user);
 
   app.innerHTML = shell(
     `
     <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>GPS en tiempo real</strong> como punto A.
+        Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>ubicación GPS</strong> (PC o teléfono) como punto A.
       </div>
       ${
         cita
@@ -778,17 +785,8 @@ function renderSalida() {
       ${
         cita
           ? ''
-          : `<div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">¿A quién va a visitar?</label>
-          <select id="tipo-destino" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-            <option value="cliente" ${tipoDestino === 'cliente' ? 'selected' : ''}>Cliente de mi cartera</option>
-            <option value="prospecto" ${tipoDestino === 'prospecto' ? 'selected' : ''}>Prospecto (libre)</option>
-          </select>
-          ${
-            tipoDestino === 'prospecto'
-              ? '<p class="mt-1 text-[11px] text-slate-500">Complete nombre, contacto y teléfono a mano. No usa la cartera.</p>'
-              : ''
-          }
+          : `<div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+          Solo clientes de su cartera. Los prospectos se gestionan en SAN; aquí no se crean.
         </div>`
       }
       ${clientFieldsHtml({
@@ -798,9 +796,9 @@ function renderSalida() {
         selected: cita?.clienteNombre || '',
         contactValue: cita?.contacto || '',
         phoneValue: cita?.telefono || '',
-        items: cita ? null : tipoDestino === 'prospecto' ? null : destinoItems,
-        withContactPicker: tipoDestino === 'cliente' && !cita,
-        freeForm: !cita && tipoDestino === 'prospecto',
+        items: cita ? null : destinoItems,
+        withContactPicker: !cita,
+        freeForm: false,
       })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
@@ -818,9 +816,6 @@ function renderSalida() {
   bindGpsBanner();
   // El contacto solo se precarga cuando la salida nace de una cita programada.
   bindClientSelect(document.getElementById('form-salida'), { autofill: Boolean(cita) });
-  document.getElementById('tipo-destino')?.addEventListener('change', (e) => {
-    go(`/salida?tipo=${encodeURIComponent(e.target.value)}`, { replace: true, animate: false });
-  });
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
     const esNuevo = String(data._contacto_nuevo || '') === '1';
@@ -1480,7 +1475,6 @@ function renderDashboard() {
       ${kpi('Km promedio', kmAvg, 'Kilómetros típicos por visita cerrada.')}
       ${kpi('Con foto', conFoto, 'Visitas que sí llevaron evidencia.')}
       ${kpi('Clientes en cartera', clientes, 'Clientes activos de los ejecutivos filtrados.')}
-      ${kpi('Prospectos', prospectos, 'Posibles clientes todavía no formales.')}
       ${kpi('Citas agendadas', citasProg, 'Visitas programadas por el jefe, aún sin registrar.')}
       ${kpi('% con foto', `${fotoPct}%`, 'De las visitas cerradas, cuántas llevan foto.')}
       ${kpi('Reportes tardíos', tardias, 'Visitas reportadas después del día esperado.')}
@@ -1527,11 +1521,6 @@ function renderDashboard() {
         'Visitas reportadas según el país del ejecutivo.',
         'chart-paises'
       )}
-      ${chartCard(
-        '¿Cómo está la cartera?',
-        'Clientes formales vs prospectos de los ejecutivos filtrados.',
-        'chart-cartera'
-      )}
     </div>`;
 
   const ejecutivosBody = `
@@ -1552,7 +1541,7 @@ function renderDashboard() {
           <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div class="min-w-0">
               <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(r.nombre)}</div>
-              <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes · ${r.prospectos} prospectos · ${r.citas} citas</p>
+              <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes · ${r.citas} citas</p>
             </div>
             <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-600">
               <div>Salidas<strong class="mt-0.5 block text-sm text-slate-900">${r.salidas}</strong></div>
@@ -1813,22 +1802,6 @@ function renderDashboard() {
     });
   }
 
-  const elCartera = document.getElementById('chart-cartera');
-  if (elCartera) {
-    new ChartLib(elCartera, {
-      type: 'doughnut',
-      data: {
-        labels: ['Clientes', 'Prospectos'],
-        datasets: [
-          {
-            data: [clientes || 0, prospectos || 0],
-            backgroundColor: ['#0ea5e9', '#f59e0b'],
-          },
-        ],
-      },
-      options: { ...common },
-    });
-  }
 }
 
 function renderCartera() {
@@ -3348,7 +3321,7 @@ function render() {
       renderReintegro();
       break;
     case '/cliente':
-      renderRegistrarCliente();
+      go('/', { replace: true, animate: false });
       break;
     default:
       if (path !== '/') go('/', { replace: true, animate: false });
