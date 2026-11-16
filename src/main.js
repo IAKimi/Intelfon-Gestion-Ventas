@@ -1293,117 +1293,398 @@ function renderCitas() {
   });
 }
 
+function dashboardDayKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
 function renderDashboard() {
   const user = getState().session;
   const isAdmin = user.rol === 'admin';
-  const ejecutivos = isAdmin ? getEjecutivos() : getTeamVendedores(user);
   const state = getState();
-  const rows = ejecutivos.map((u) => {
-    const salidas = (state.salidas || []).filter((s) => s.vendedorId === u.id);
-    const visitadasList = salidas.filter((s) => s.estado === 'visitada');
-    const kmTotal = visitadasList.reduce(
-      (sum, s) => sum + (Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0),
-      0
-    );
-    return {
-      nombre: u.nombre,
-      pais: u.pais || '',
-      clientes: getClientsByVendedor(u.id).filter((c) => c.tipo !== 'prospecto').length,
-      salidas: salidas.length,
-      visitadas: visitadasList.length,
-      pendientes: salidas.length - visitadasList.length,
-      citas: getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
-      km: Math.round(kmTotal * 100) / 100,
-    };
+  const params = new URLSearchParams(location.search);
+  const paisSel = params.get('pais') || '';
+  const ejecutivoSel = params.get('ejecutivo') || '';
+  const desde = params.get('desde') || '';
+  const hasta = params.get('hasta') || '';
+
+  let ejecutivos = isAdmin ? getEjecutivos() : getTeamVendedores(user);
+  if (paisSel) ejecutivos = ejecutivos.filter((u) => u.pais === paisSel);
+  if (ejecutivoSel) ejecutivos = ejecutivos.filter((u) => u.id === ejecutivoSel);
+  const teamIds = new Set(ejecutivos.map((u) => u.id));
+
+  const inRange = (day) => {
+    if (!day) return !desde && !hasta;
+    if (desde && day < desde) return false;
+    if (hasta && day > hasta) return false;
+    return true;
+  };
+
+  const salidasAll = (state.salidas || []).filter((s) => {
+    if (!teamIds.has(s.vendedorId)) return false;
+    const day = dashboardDayKey(s.fecha_registro_salida || s.createdAt);
+    return inRange(day);
   });
-  const tot = rows.reduce(
-    (a, r) => ({
-      salidas: a.salidas + r.salidas,
-      visitadas: a.visitadas + r.visitadas,
-      pendientes: a.pendientes + r.pendientes,
-      km: a.km + r.km,
-    }),
-    { salidas: 0, visitadas: 0, pendientes: 0, km: 0 }
+  const visitadas = salidasAll.filter((s) => s.estado === 'visitada');
+  const pendientes = salidasAll.filter((s) => s.estado === 'pendiente');
+  const kmTotal = visitadas.reduce(
+    (sum, s) => sum + (Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0),
+    0
   );
-  const card = (label, value) => `
+  const kmAvg = visitadas.length ? Math.round((kmTotal / visitadas.length) * 100) / 100 : 0;
+  const cierrePct = salidasAll.length
+    ? Math.round((visitadas.length / salidasAll.length) * 100)
+    : 0;
+
+  const clientsScope = (state.clients || []).filter(
+    (c) => c.activo !== false && teamIds.has(c.vendedorId)
+  );
+  const clientes = clientsScope.filter((c) => c.tipo !== 'prospecto').length;
+  const prospectos = clientsScope.filter((c) => c.tipo === 'prospecto').length;
+  const citasProg = ejecutivos.reduce(
+    (n, u) => n + getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
+    0
+  );
+  const conFoto = visitadas.filter((s) => s.tiene_evidencia).length;
+  const tardias = visitadas.filter((s) => s.reporte_tardio).length;
+
+  const byDayMap = new Map();
+  for (const s of salidasAll) {
+    const day = dashboardDayKey(s.fecha_registro_salida || s.createdAt) || 'sin-fecha';
+    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0 });
+    byDayMap.get(day).salidas += 1;
+  }
+  for (const s of visitadas) {
+    const day = dashboardDayKey(s.fecha_reporte_real || s.visitedAt || s.fecha_registro_salida) || 'sin-fecha';
+    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0 });
+    byDayMap.get(day).visitas += 1;
+  }
+  const dayLabels = [...byDayMap.keys()].filter((d) => d !== 'sin-fecha').sort();
+  const daySalidas = dayLabels.map((d) => byDayMap.get(d).salidas);
+  const dayVisitas = dayLabels.map((d) => byDayMap.get(d).visitas);
+
+  const rows = ejecutivos
+    .map((u) => {
+      const salidas = salidasAll.filter((s) => s.vendedorId === u.id);
+      const vis = salidas.filter((s) => s.estado === 'visitada');
+      const km = vis.reduce(
+        (sum, s) => sum + (Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0),
+        0
+      );
+      return {
+        id: u.id,
+        nombre: u.nombre,
+        pais: u.pais || '',
+        clientes: getClientsByVendedor(u.id).filter((c) => c.tipo !== 'prospecto').length,
+        salidas: salidas.length,
+        visitadas: vis.length,
+        pendientes: salidas.length - vis.length,
+        km: Math.round(km * 100) / 100,
+        citas: getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
+      };
+    })
+    .sort((a, b) => b.visitadas - a.visitadas || b.salidas - a.salidas);
+
+  const tipoMap = new Map();
+  for (const s of visitadas) {
+    const key = String(s.tipo_visita || 'Sin tipo').trim() || 'Sin tipo';
+    tipoMap.set(key, (tipoMap.get(key) || 0) + 1);
+  }
+  const tipoLabels = [...tipoMap.keys()];
+  const tipoValues = tipoLabels.map((k) => tipoMap.get(k));
+
+  const paisMap = { SV: 0, GT: 0, OTRO: 0 };
+  for (const r of rows) {
+    if (r.pais === 'SV' || r.pais === 'GT') paisMap[r.pais] += r.visitadas;
+    else paisMap.OTRO += r.visitadas;
+  }
+
+  const topEjec = rows.slice(0, 8);
+  const kpi = (title, value, help) => `
     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">${label}</div>
+      <div class="text-xs font-semibold text-slate-500">${title}</div>
       <div class="mt-1 text-2xl font-black text-slate-900">${value}</div>
+      <p class="mt-1 text-[11px] leading-snug text-slate-400">${help}</p>
     </div>`;
+
+  const chartCard = (title, help, canvasId) => `
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="text-sm font-black text-slate-900">${title}</h3>
+      <p class="mt-1 text-xs text-slate-500">${help}</p>
+      <div class="mt-3 h-56"><canvas id="${canvasId}"></canvas></div>
+    </section>`;
+
+  const allEjecOptions = (isAdmin ? getEjecutivos() : getTeamVendedores(user))
+    .filter((u) => !paisSel || u.pais === paisSel)
+    .map(
+      (u) =>
+        `<option value="${u.id}" ${ejecutivoSel === u.id ? 'selected' : ''}>${escapeHtml(u.nombre)} (${escapeHtml(u.pais || '—')})</option>`
+    )
+    .join('');
 
   app.innerHTML = shell(
     `
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
-      ${card('Ejecutivos', rows.length)}
-      ${card('Salidas', tot.salidas)}
-      ${card('Visitas', tot.visitadas)}
-      ${card('Pendientes', tot.pendientes)}
-      ${card('Km reportados', Math.round(tot.km * 100) / 100)}
+    <div class="mb-4">
+      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900">¿Cómo va el trabajo de campo?</h2>
+      <p class="mt-1 text-sm text-slate-500">Números claros de salidas, visitas, kilómetros y cartera. Use los filtros para acotar.</p>
     </div>
-    <section class="mt-5 space-y-3 sm:hidden">
-      ${
-        rows.length
-          ? rows
-              .map(
-                (r) => `
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div class="font-black text-slate-900">${escapeHtml(r.nombre)}</div>
-          <p class="mt-1 text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes</p>
-          <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div class="rounded-xl bg-slate-50 px-3 py-2">Salidas <strong class="block text-sm">${r.salidas}</strong></div>
-            <div class="rounded-xl bg-emerald-50 px-3 py-2 text-emerald-800">Visitas <strong class="block text-sm">${r.visitadas}</strong></div>
-            <div class="rounded-xl bg-amber-50 px-3 py-2 text-amber-800">Pendientes <strong class="block text-sm">${r.pendientes}</strong></div>
-            <div class="rounded-xl bg-slate-50 px-3 py-2">Km <strong class="block text-sm">${r.km}</strong></div>
-          </div>
-        </div>`
-              )
-              .join('')
-          : '<p class="text-sm text-slate-400">Sin ejecutivos en el alcance.</p>'
-      }
+
+    <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">País</label>
+        <select name="pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Todos</option>
+          <option value="SV" ${paisSel === 'SV' ? 'selected' : ''}>El Salvador</option>
+          <option value="GT" ${paisSel === 'GT' ? 'selected' : ''}>Guatemala</option>
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Ejecutivo</label>
+        <select name="ejecutivo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Todos</option>
+          ${allEjecOptions}
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Desde</label>
+        <input type="date" name="desde" value="${escapeHtml(desde)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Hasta</label>
+        <input type="date" name="hasta" value="${escapeHtml(hasta)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div class="flex items-end gap-2">
+        <button class="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white hover:bg-red-700">Aplicar</button>
+        <button type="button" id="dash-clear" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Limpiar</button>
+      </div>
+    </form>
+
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      ${kpi('Salidas registradas', salidasAll.length, 'Cuántas veces un vendedor dijo “voy a salir” en el periodo.')}
+      ${kpi('Visitas cerradas', visitadas.length, 'Salidas que ya tienen reporte con foto y GPS de llegada.')}
+      ${kpi('Aún pendientes', pendientes.length, 'Salidas abiertas: salieron pero todavía no reportaron la visita.')}
+      ${kpi('% de cierre', `${cierrePct}%`, 'De cada 100 salidas, cuántas ya fueron reportadas.')}
+      ${kpi('Kilómetros recorridos', Math.round(kmTotal * 100) / 100, 'Suma de distancias GPS (oficina/salida → punto de visita).')}
+      ${kpi('Km promedio por visita', kmAvg, 'Promedio de kilómetros de cada visita ya cerrada.')}
+      ${kpi('Clientes en cartera', clientes, 'Clientes cargados de los ejecutivos filtrados.')}
+      ${kpi('Prospectos', prospectos, 'Prospectos creados (aún no son cliente formal).')}
+      ${kpi('Citas programadas', citasProg, 'Visitas agendadas por el jefe que todavía no se registran.')}
+      ${kpi('Reportes con foto', conFoto, 'Visitas cerradas que sí adjuntaron evidencia.')}
+      ${kpi('Reportes tardíos', tardias, 'Visitas reportadas fuera del día esperado.')}
+      ${kpi('Ejecutivos en vista', ejecutivos.length, 'Vendedores incluidos con el filtro actual.')}
+    </div>
+
+    <div class="mt-5 grid gap-4 lg:grid-cols-2">
+      ${chartCard(
+        '¿Cuántas salidas y visitas hubo por día?',
+        'Línea de actividad diaria: cuántas salidas se registraron y cuántas visitas se cerraron.',
+        'chart-actividad'
+      )}
+      ${chartCard(
+        '¿Quién cerró más visitas?',
+        'Comparación por ejecutivo: salidas abiertas vs visitas ya reportadas.',
+        'chart-ejecutivos'
+      )}
+      ${chartCard(
+        '¿Por qué motivo visitan?',
+        'Tipos de visita más usados en los reportes cerrados.',
+        'chart-tipos'
+      )}
+      ${chartCard(
+        '¿En qué país hay más visitas cerradas?',
+        'Visitas reportadas agrupadas por país del ejecutivo.',
+        'chart-paises'
+      )}
+    </div>
+
+    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="text-sm font-black text-slate-900">Detalle por ejecutivo</h3>
+      <p class="mt-1 text-xs text-slate-500">Lista ordenada por visitas cerradas. Sirve para ver quién está al día y quién tiene pendientes.</p>
+      <div class="mt-3 space-y-3 lg:hidden">
+        ${
+          rows.length
+            ? rows
+                .map(
+                  (r) => `
+          <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
+            <div class="font-black text-slate-900">${escapeHtml(r.nombre)}</div>
+            <p class="text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes</p>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
+              <div>Salidas <strong class="block text-sm">${r.salidas}</strong></div>
+              <div>Visitas <strong class="block text-sm text-emerald-700">${r.visitadas}</strong></div>
+              <div>Pendientes <strong class="block text-sm ${r.pendientes ? 'text-amber-700' : ''}">${r.pendientes}</strong></div>
+              <div>Km <strong class="block text-sm">${r.km}</strong></div>
+            </div>
+          </div>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400">No hay ejecutivos con estos filtros.</p>'
+        }
+      </div>
+      <div class="mt-3 hidden overflow-x-auto lg:block">
+        <table class="w-full min-w-[720px] text-left text-sm">
+          <thead>
+            <tr class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
+              <th class="px-3 py-2 font-bold">Ejecutivo</th>
+              <th class="px-3 py-2 font-bold">País</th>
+              <th class="px-3 py-2 font-bold">Clientes</th>
+              <th class="px-3 py-2 font-bold">Salidas</th>
+              <th class="px-3 py-2 font-bold">Visitas</th>
+              <th class="px-3 py-2 font-bold">Pendientes</th>
+              <th class="px-3 py-2 font-bold">Km</th>
+              <th class="px-3 py-2 font-bold">Citas</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              rows.length
+                ? rows
+                    .map(
+                      (r) => `
+              <tr class="border-b border-slate-50">
+                <td class="px-3 py-2.5 font-semibold text-slate-900">${escapeHtml(r.nombre)}</td>
+                <td class="px-3 py-2.5 text-slate-600">${escapeHtml(r.pais || '—')}</td>
+                <td class="px-3 py-2.5 text-slate-600">${r.clientes}</td>
+                <td class="px-3 py-2.5 text-slate-600">${r.salidas}</td>
+                <td class="px-3 py-2.5 font-semibold text-emerald-700">${r.visitadas}</td>
+                <td class="px-3 py-2.5 ${r.pendientes ? 'font-semibold text-amber-700' : 'text-slate-600'}">${r.pendientes}</td>
+                <td class="px-3 py-2.5 text-slate-600">${r.km}</td>
+                <td class="px-3 py-2.5 text-slate-600">${r.citas}</td>
+              </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-400">No hay ejecutivos con estos filtros.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
     </section>
-    <section class="mt-5 hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm sm:block">
-      <table class="w-full text-left text-sm">
-        <thead>
-          <tr class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
-            <th class="px-4 py-3 font-bold">Ejecutivo</th>
-            <th class="px-4 py-3 font-bold">País</th>
-            <th class="px-4 py-3 font-bold">Clientes</th>
-            <th class="px-4 py-3 font-bold">Salidas</th>
-            <th class="px-4 py-3 font-bold">Reportadas</th>
-            <th class="px-4 py-3 font-bold">Pendientes</th>
-            <th class="px-4 py-3 font-bold">Km</th>
-            <th class="px-4 py-3 font-bold">Citas</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${
-            rows.length
-              ? rows
-                  .map(
-                    (r) => `
-            <tr class="border-b border-slate-50">
-              <td class="px-4 py-3 font-semibold text-slate-900">${escapeHtml(r.nombre)}</td>
-              <td class="px-4 py-3 text-slate-600">${escapeHtml(r.pais || '—')}</td>
-              <td class="px-4 py-3 text-slate-600">${r.clientes}</td>
-              <td class="px-4 py-3 text-slate-600">${r.salidas}</td>
-              <td class="px-4 py-3 text-emerald-700 font-semibold">${r.visitadas}</td>
-              <td class="px-4 py-3 ${r.pendientes ? 'text-amber-700 font-semibold' : 'text-slate-600'}">${r.pendientes}</td>
-              <td class="px-4 py-3 text-slate-600">${r.km}</td>
-              <td class="px-4 py-3 text-slate-600">${r.citas}</td>
-            </tr>`
-                  )
-                  .join('')
-              : '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin ejecutivos en el alcance.</td></tr>'
-          }
-        </tbody>
-      </table>
-    </section>
-    <p class="mt-3 text-[11px] text-slate-400">Los km se calculan en la plataforma (GPS salida → GPS visita) al cerrar cada reporte.</p>
     `,
     { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/', wide: true }
   );
+
   if (isAdmin) bindAdminSubShell();
   else bindShell('/');
+
+  document.getElementById('dash-filters')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const q = new URLSearchParams();
+    for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
+      const v = String(fd.get(key) || '').trim();
+      if (v) q.set(key, v);
+    }
+    const base = isAdmin ? '/admin/dashboard' : '/dashboard';
+    go(q.toString() ? `${base}?${q}` : base, { replace: true, animate: false });
+  });
+  document.getElementById('dash-clear')?.addEventListener('click', () => {
+    go(isAdmin ? '/admin/dashboard' : '/dashboard', { replace: true, animate: false });
+  });
+
+  const ChartLib = window.Chart;
+  if (!ChartLib) return;
+  const grid = { color: 'rgba(148,163,184,0.25)' };
+  const common = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+  };
+
+  const elAct = document.getElementById('chart-actividad');
+  if (elAct) {
+    new ChartLib(elAct, {
+      type: 'line',
+      data: {
+        labels: dayLabels.length ? dayLabels.map((d) => d.slice(5)) : ['Sin datos'],
+        datasets: [
+          {
+            label: 'Salidas',
+            data: dayLabels.length ? daySalidas : [0],
+            borderColor: '#dc2626',
+            backgroundColor: 'rgba(220,38,38,0.12)',
+            fill: true,
+            tension: 0.3,
+          },
+          {
+            label: 'Visitas cerradas',
+            data: dayLabels.length ? dayVisitas : [0],
+            borderColor: '#059669',
+            backgroundColor: 'rgba(5,150,105,0.12)',
+            fill: true,
+            tension: 0.3,
+          },
+        ],
+      },
+      options: { ...common, scales: { x: { grid }, y: { beginAtZero: true, grid } } },
+    });
+  }
+
+  const elEj = document.getElementById('chart-ejecutivos');
+  if (elEj) {
+    new ChartLib(elEj, {
+      type: 'bar',
+      data: {
+        labels: topEjec.length ? topEjec.map((r) => r.nombre.split(' ')[0]) : ['Sin datos'],
+        datasets: [
+          {
+            label: 'Salidas',
+            data: topEjec.length ? topEjec.map((r) => r.salidas) : [0],
+            backgroundColor: '#fda4af',
+          },
+          {
+            label: 'Visitas',
+            data: topEjec.length ? topEjec.map((r) => r.visitadas) : [0],
+            backgroundColor: '#34d399',
+          },
+        ],
+      },
+      options: { ...common, scales: { x: { grid }, y: { beginAtZero: true, grid } } },
+    });
+  }
+
+  const elTipos = document.getElementById('chart-tipos');
+  if (elTipos) {
+    new ChartLib(elTipos, {
+      type: 'doughnut',
+      data: {
+        labels: tipoLabels.length ? tipoLabels : ['Sin visitas'],
+        datasets: [
+          {
+            data: tipoValues.length ? tipoValues : [1],
+            backgroundColor: ['#dc2626', '#f97316', '#eab308', '#22c55e', '#0ea5e9', '#8b5cf6', '#64748b'],
+          },
+        ],
+      },
+      options: { ...common },
+    });
+  }
+
+  const elPais = document.getElementById('chart-paises');
+  if (elPais) {
+    new ChartLib(elPais, {
+      type: 'bar',
+      data: {
+        labels: ['El Salvador', 'Guatemala', 'Otro'],
+        datasets: [
+          {
+            label: 'Visitas cerradas',
+            data: [paisMap.SV, paisMap.GT, paisMap.OTRO],
+            backgroundColor: ['#1e293b', '#dc2626', '#94a3b8'],
+          },
+        ],
+      },
+      options: {
+        ...common,
+        indexAxis: 'y',
+        scales: { x: { beginAtZero: true, grid }, y: { grid } },
+      },
+    });
+  }
 }
 
 function renderCartera() {
@@ -2547,18 +2828,19 @@ function renderAdminUsuarios() {
     .map(
       (u) => `
       <tr class="border-t border-slate-100 align-top hover:bg-slate-50/80">
-        <td class="px-3 py-2.5 text-sm font-semibold text-slate-900">${escapeHtml(u.usuario)}</td>
-        <td class="px-3 py-2.5 text-sm text-slate-700">
-          <div>${escapeHtml(u.nombre)}</div>
+        <td class="px-3 py-2.5">
+          <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(u.nombre)}</div>
+          <div class="mt-0.5 text-xs text-slate-500 break-all">${escapeHtml(u.usuario)}</div>
           <span class="mt-1 inline-flex rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
         </td>
-        <td class="px-3 py-2.5 text-sm text-slate-600">${escapeHtml(u.correo || '—')}</td>
-        <td class="px-3 py-2.5 text-sm capitalize text-slate-700">${escapeHtml(u.rol)}</td>
-        <td class="px-3 py-2.5 text-xs text-slate-600">${escapeHtml(u.pago_combustible_default || '—')}</td>
+        <td class="px-3 py-2.5 text-sm text-slate-600 break-all">${escapeHtml(u.correo || '—')}</td>
+        <td class="px-3 py-2.5 text-sm text-slate-600 break-all">${escapeHtml(u.correo_jefe || '—')}</td>
+        <td class="px-3 py-2.5 text-sm capitalize text-slate-700 whitespace-nowrap">${escapeHtml(u.rol)}</td>
+        <td class="px-3 py-2.5 text-xs text-slate-600 break-words">${escapeHtml(u.pago_combustible_default || '—')}</td>
         <td class="px-3 py-2.5">${iosSwitch('combustible_row', u.combustible_activo, {
           dataAttr: `data-toggle-fuel="${u.id}"`,
         })}</td>
-        <td class="px-3 py-2.5">${userActions(u)}</td>
+        <td class="px-3 py-2.5 min-w-[9rem]">${userActions(u)}</td>
       </tr>`
     )
     .join('');
@@ -2593,17 +2875,17 @@ function renderAdminUsuarios() {
         <div class="grid gap-3 lg:hidden">
           ${usersCards || '<p class="text-sm text-slate-400">Sin usuarios en este país.</p>'}
         </div>
-        <div class="hidden lg:block">
-          <table class="w-full table-fixed text-left">
+        <div class="hidden overflow-x-auto lg:block">
+          <table class="w-full min-w-[860px] text-left">
             <thead class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
               <tr>
-                <th class="w-[14%] px-3 py-2 font-bold">Usuario</th>
-                <th class="w-[18%] px-3 py-2 font-bold">Nombre</th>
-                <th class="w-[20%] px-3 py-2 font-bold">Correo</th>
-                <th class="w-[10%] px-3 py-2 font-bold">Rol</th>
-                <th class="w-[14%] px-3 py-2 font-bold">Pago</th>
-                <th class="w-[10%] px-3 py-2 font-bold">Comb.</th>
-                <th class="w-[14%] px-3 py-2 font-bold">Acciones</th>
+                <th class="px-3 py-2 font-bold">Persona</th>
+                <th class="px-3 py-2 font-bold">Correo</th>
+                <th class="px-3 py-2 font-bold">Correo jefe</th>
+                <th class="px-3 py-2 font-bold">Rol</th>
+                <th class="px-3 py-2 font-bold">Pago</th>
+                <th class="px-3 py-2 font-bold">Comb.</th>
+                <th class="px-3 py-2 font-bold">Acciones</th>
               </tr>
             </thead>
             <tbody>${usersRows || '<tr><td colspan="7" class="px-3 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
