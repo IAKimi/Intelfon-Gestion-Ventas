@@ -1494,10 +1494,10 @@ function renderDashboard() {
     </div>
 
     <div class="mb-3 flex flex-wrap gap-2">
-      <button data-nav="${buildQuery({ desde: hoy, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
-      <button data-nav="${buildQuery({ desde: d7, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d7, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 7 días</button>
-      <button data-nav="${buildQuery({ desde: d30, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d30, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 30 días</button>
-      <button data-nav="${buildQuery({ desde: '', hasta: '' })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: hoy, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: d7, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d7, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 7 días</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: d30, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d30, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 30 días</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: '', hasta: '' }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
     </div>
 
     <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
