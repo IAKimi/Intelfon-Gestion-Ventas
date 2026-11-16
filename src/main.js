@@ -260,9 +260,10 @@ function optionsHtml(list, selectedValue = '') {
     .join('');
 }
 
-function shell(content, { title = '', showBack = false, backTo = '/' } = {}) {
+function shell(content, { title = '', showBack = false, backTo = '/', wide = false } = {}) {
   const state = getState();
   const user = state.session;
+  const maxW = wide ? 'max-w-6xl' : 'max-w-3xl';
   return `
     <div class="relative min-h-screen">
       <div class="pointer-events-none absolute inset-0 overflow-hidden">
@@ -271,7 +272,7 @@ function shell(content, { title = '', showBack = false, backTo = '/' } = {}) {
       </div>
 
       <header class="relative z-10 border-b border-slate-200/80 bg-white/90 backdrop-blur">
-        <div class="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-3 py-3 sm:px-4">
+        <div class="mx-auto flex w-full ${maxW} items-center justify-between gap-3 px-3 py-3 sm:px-4">
           <div class="flex items-center gap-3">
             ${
               showBack
@@ -300,7 +301,7 @@ function shell(content, { title = '', showBack = false, backTo = '/' } = {}) {
         </div>
       </header>
 
-      <main class="relative z-10 mx-auto w-full max-w-3xl px-3 sm:px-4 py-5 sm:py-6 pb-24">
+      <main class="relative z-10 mx-auto w-full ${maxW} px-3 sm:px-4 py-5 sm:py-6 pb-24">
         <div id="view-root" class="page-enter">${content}</div>
       </main>
       <div id="toast" class="hidden"></div>
@@ -2494,18 +2495,23 @@ function renderAdminUsuarios() {
   const usersRows = visibleUsers
     .map(
       (u) => `
-      <tr class="border-t border-slate-100">
-        <td class="px-3 py-3 text-sm font-semibold text-slate-900">${escapeHtml(u.usuario)}</td>
-        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.nombre)} <span class="ml-1 rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span></td>
-        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo || '—')}</td>
-        <td class="px-3 py-3 text-sm text-slate-600">${escapeHtml(u.correo_jefe || '—')}</td>
-        <td class="px-3 py-3 text-sm capitalize">${escapeHtml(u.rol)}</td>
-        <td class="px-3 py-3">
+      <tr class="border-t border-slate-100 hover:bg-slate-50/80">
+        <td class="px-2.5 py-1.5 text-sm font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(u.usuario)}</td>
+        <td class="px-2.5 py-1.5 text-sm text-slate-700">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span>${escapeHtml(u.nombre)}</span>
+            <span class="rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
+          </div>
+        </td>
+        <td class="px-2.5 py-1.5 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(u.correo || '—')}</td>
+        <td class="px-2.5 py-1.5 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(u.correo_jefe || '—')}</td>
+        <td class="px-2.5 py-1.5 text-sm capitalize text-slate-700">${escapeHtml(u.rol)}</td>
+        <td class="px-2.5 py-1.5">
           ${iosSwitch('combustible_row', u.combustible_activo, {
             dataAttr: `data-toggle-fuel="${u.id}"`,
           })}
         </td>
-        <td class="px-3 py-3 text-right whitespace-nowrap">
+        <td class="px-2.5 py-1.5 text-right whitespace-nowrap">
           <button data-edit="${u.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
           <button data-reset="${u.id}" class="ml-2 text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Restablecer clave</button>
           ${
@@ -2523,43 +2529,47 @@ function renderAdminUsuarios() {
     )
     .join('');
 
+  const paisLabel = paisSel === 'GT' ? 'Guatemala' : paisSel === 'SV' ? 'El Salvador' : 'Sin país';
+
   app.innerHTML = shell(
     `
-    <div class="space-y-5">
-      <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div class="mb-4 flex items-center justify-between gap-3">
+    <div class="space-y-4">
+      <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Usuarios</h3>
-            <p class="mt-1 text-xs text-slate-500">Perfiles, roles y opciones heredadas de catálogos.</p>
+            <p class="mt-0.5 text-xs text-slate-500">Perfiles, roles y opciones heredadas de catálogos.</p>
           </div>
           <button id="btn-new-user" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Nuevo</button>
         </div>
-        <div class="mb-4 grid grid-cols-2 gap-3">
-          <button data-nav="/admin/usuarios?pais=GT" class="card-lift rounded-2xl border ${paisSel === 'GT' ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'} p-4 text-left shadow-sm">
-            <div class="text-sm font-black text-slate-900">Guatemala</div>
-            <p class="mt-1 text-xs text-slate-500">${countPais('GT')} usuario${countPais('GT') === 1 ? '' : 's'}</p>
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <button data-nav="/admin/usuarios?pais=GT" class="rounded-full border px-3 py-1.5 text-xs font-bold transition ${paisSel === 'GT' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600 hover:border-red-200'}">
+            Guatemala · ${countPais('GT')}
           </button>
-          <button data-nav="/admin/usuarios?pais=SV" class="card-lift rounded-2xl border ${paisSel === 'SV' ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'} p-4 text-left shadow-sm">
-            <div class="text-sm font-black text-slate-900">El Salvador</div>
-            <p class="mt-1 text-xs text-slate-500">${countPais('SV')} usuario${countPais('SV') === 1 ? '' : 's'}</p>
+          <button data-nav="/admin/usuarios?pais=SV" class="rounded-full border px-3 py-1.5 text-xs font-bold transition ${paisSel === 'SV' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600 hover:border-red-200'}">
+            El Salvador · ${countPais('SV')}
           </button>
+          ${
+            sinPais
+              ? `<button data-nav="/admin/usuarios?pais=XX" class="rounded-full border px-3 py-1.5 text-xs font-bold transition ${paisSel === 'XX' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-500 hover:border-red-200'}">Sin país · ${sinPais}</button>`
+              : ''
+          }
+          <span class="ml-auto text-xs font-semibold text-slate-500">${paisLabel} · ${visibleUsers.length} usuario${visibleUsers.length === 1 ? '' : 's'}</span>
         </div>
-        ${sinPais ? `<button data-nav="/admin/usuarios?pais=XX" class="mb-3 text-xs font-bold ${paisSel === 'XX' ? 'text-red-600' : 'text-slate-400'} hover:underline">${sinPais} usuario${sinPais === 1 ? '' : 's'} sin país asignado</button>` : ''}
-        <p class="mb-2 text-xs font-semibold text-slate-700">${paisSel === 'GT' ? 'Guatemala' : paisSel === 'SV' ? 'El Salvador' : 'Sin país'} · ${visibleUsers.length} usuario${visibleUsers.length === 1 ? '' : 's'}</p>
-        <div class="overflow-x-auto">
-          <table class="min-w-full text-left">
-            <thead class="text-xs uppercase tracking-wider text-slate-400">
+        <div class="w-full">
+          <table class="w-full table-auto text-left">
+            <thead class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
               <tr>
-                <th class="px-3 py-2">Usuario</th>
-                <th class="px-3 py-2">Nombre</th>
-                <th class="px-3 py-2">Correo</th>
-                <th class="px-3 py-2">Correo jefe</th>
-                <th class="px-3 py-2">Rol</th>
-                <th class="px-3 py-2">Combustible</th>
-                <th class="px-3 py-2"></th>
+                <th class="px-2.5 py-2 font-bold">Usuario</th>
+                <th class="px-2.5 py-2 font-bold">Nombre</th>
+                <th class="px-2.5 py-2 font-bold">Correo</th>
+                <th class="px-2.5 py-2 font-bold">Correo jefe</th>
+                <th class="px-2.5 py-2 font-bold">Rol</th>
+                <th class="px-2.5 py-2 font-bold">Combustible</th>
+                <th class="px-2.5 py-2 font-bold"></th>
               </tr>
             </thead>
-            <tbody>${usersRows || '<tr><td colspan="7" class="px-3 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
+            <tbody>${usersRows || '<tr><td colspan="7" class="px-2.5 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
           </table>
         </div>
       </section>
@@ -2601,7 +2611,7 @@ function renderAdminUsuarios() {
       </section>
     </div>
     `,
-    { title: 'Usuarios', showBack: true, backTo: '/admin' }
+    { title: 'Usuarios', showBack: true, backTo: '/admin', wide: true }
   );
   bindAdminSubShell();
 
