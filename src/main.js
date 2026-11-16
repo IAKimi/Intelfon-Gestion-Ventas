@@ -2294,6 +2294,26 @@ function renderAdminBaseDatos() {
   let clients = state.clients.filter((c) => c.activo !== false);
   if (filterVend) clients = clients.filter((c) => c.vendedorId === filterVend);
   if (filterPais) clients = clients.filter((c) => c.pais === filterPais);
+  clients.sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'));
+
+  const CLIENTS_PAGE_SIZE = 50;
+  const clientsTotal = clients.length;
+  const clientsPages = Math.max(1, Math.ceil(clientsTotal / CLIENTS_PAGE_SIZE));
+  let clientsPage = Number.parseInt(params.get('page') || '1', 10);
+  if (!Number.isFinite(clientsPage) || clientsPage < 1) clientsPage = 1;
+  if (clientsPage > clientsPages) clientsPage = clientsPages;
+  const clientsOffset = (clientsPage - 1) * CLIENTS_PAGE_SIZE;
+  const clientsPageItems = clients.slice(clientsOffset, clientsOffset + CLIENTS_PAGE_SIZE);
+  const clientsFrom = clientsTotal ? clientsOffset + 1 : 0;
+  const clientsTo = Math.min(clientsOffset + CLIENTS_PAGE_SIZE, clientsTotal);
+
+  const clientsListQuery = (pageNum) => {
+    const q = new URLSearchParams({ view: 'clientes' });
+    if (filterVend) q.set('vendedor', filterVend);
+    if (filterPais) q.set('pais', filterPais);
+    if (pageNum > 1) q.set('page', String(pageNum));
+    return `/admin/base-datos?${q.toString()}`;
+  };
 
   const sellerOpts = ejecutivos
     .map(
@@ -2444,36 +2464,56 @@ function renderAdminBaseDatos() {
         </div>
         <button id="btn-new-client" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Cliente</button>
       </div>
-      <p class="mb-3 text-xs font-semibold text-slate-500">${clients.length} cliente${clients.length === 1 ? '' : 's'}</p>
-      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p class="text-xs font-semibold text-slate-500">${clientsTotal} cliente${clientsTotal === 1 ? '' : 's'} · mostrando ${clientsFrom}–${clientsTo}</p>
+        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Página ${clientsPage} de ${clientsPages}</p>
+      </div>
+      <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         ${
-          clients.length
-            ? clients
+          clientsPageItems.length
+            ? clientsPageItems
                 .map(
                   (c) => `
-          <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div class="flex items-start justify-between gap-3">
+          <article class="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div class="flex items-start justify-between gap-2">
               <div class="min-w-0">
-                <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(c.nombre)}</div>
-                <div class="mt-0.5 text-xs text-slate-500">Código: ${escapeHtml(c.codigo || '—')}</div>
+                <div class="text-[13px] font-black leading-snug text-slate-900 break-words">${escapeHtml(c.nombre)}</div>
+                <div class="mt-0.5 text-[11px] text-slate-500">${escapeHtml(c.codigo || 'Sin código')} · ${escapeHtml(c.pais || '—')}</div>
               </div>
-              <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">${escapeHtml(c.pais || '—')}</span>
             </div>
-            <dl class="mt-3 space-y-1.5 text-xs text-slate-600">
-              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Contacto</span><div class="break-words">${escapeHtml(c.contacto || '—')}</div></div>
-              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Teléfono</span><div>${escapeHtml(c.telefono || '—')}</div></div>
-              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Ejecutivo</span><div class="break-words">${escapeHtml(c.vendedorNombre || 'Sin asignar')}</div></div>
-            </dl>
-            <div class="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-3">
-              <button data-edit-client="${c.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
-              <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
+            <div class="mt-2 space-y-0.5 text-[11px] leading-snug text-slate-600">
+              <div class="truncate"><span class="font-semibold text-slate-400">Contacto:</span> ${escapeHtml(c.contacto || '—')}</div>
+              <div class="truncate"><span class="font-semibold text-slate-400">Tel:</span> ${escapeHtml(c.telefono || '—')}</div>
+              <div class="truncate"><span class="font-semibold text-slate-400">Ejecutivo:</span> ${escapeHtml(c.vendedorNombre || 'Sin asignar')}</div>
+            </div>
+            <div class="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-2">
+              <button data-edit-client="${c.id}" class="text-[11px] font-bold text-red-600 hover:underline">Editar</button>
+              <button data-del-client="${c.id}" class="text-[11px] font-bold text-slate-400 hover:text-red-600">Eliminar</button>
             </div>
           </article>`
                 )
                 .join('')
-            : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">Sin clientes.</p>'
+            : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3 2xl:col-span-4">Sin clientes.</p>'
         }
       </div>
+      ${
+        clientsPages > 1
+          ? `<div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button data-nav="${escapeHtml(clientsListQuery(clientsPage - 1))}" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 ${clientsPage <= 1 ? 'pointer-events-none opacity-40' : 'hover:border-red-200 hover:text-red-600'}" ${clientsPage <= 1 ? 'disabled' : ''}>Anterior</button>
+              ${Array.from({ length: clientsPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === clientsPages || Math.abs(p - clientsPage) <= 2)
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && p - arr[idx - 1] > 1) acc.push('<span class="px-1 text-xs text-slate-400">…</span>');
+                  acc.push(
+                    `<button data-nav="${escapeHtml(clientsListQuery(p))}" class="min-w-[2rem] rounded-xl border px-2.5 py-2 text-xs font-bold ${p === clientsPage ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600 hover:border-red-200'}">${p}</button>`
+                  );
+                  return acc;
+                }, [])
+                .join('')}
+              <button data-nav="${escapeHtml(clientsListQuery(clientsPage + 1))}" class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 ${clientsPage >= clientsPages ? 'pointer-events-none opacity-40' : 'hover:border-red-200 hover:text-red-600'}" ${clientsPage >= clientsPages ? 'disabled' : ''}>Siguiente</button>
+            </div>`
+          : ''
+      }
     </section>
 
     <section id="client-editor" class="mt-4 hidden rounded-2xl border border-red-100 bg-red-50/40 p-5">
