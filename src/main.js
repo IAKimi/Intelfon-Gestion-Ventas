@@ -43,6 +43,8 @@ import {
   markCitaRegistrada,
   cancelCita,
   isJefe,
+  distanceKm,
+  LEGACY_PAGO_LABEL,
 } from './store.js';
 import { getGps, fileToDataUrl, sendToMake } from './webhook.js';
 import {
@@ -322,19 +324,24 @@ function bindShell(logoutTo = '/') {
   });
 }
 
-function renderSellerLogin() {
+function homeForRole(user) {
+  if (user?.rol === 'admin') return '/admin';
+  return '/';
+}
+
+function renderLogin() {
   app.innerHTML = shell(
     `
     <div class="mx-auto mt-8 max-w-md">
       <div class="mb-8 text-center">
         <img src="/logo-red.png" alt="RED" class="mx-auto mb-4 h-24 w-24 object-contain drop-shadow-sm" />
         <h1 class="text-2xl font-black tracking-tight text-slate-900">Gestión de Ventas</h1>
-        <p class="mt-2 text-sm text-slate-500">Acceso para ejecutivos de campo</p>
+        <p class="mt-2 text-sm text-slate-500">Inicie sesión con su usuario. El panel depende de su rol.</p>
       </div>
       <form id="login-form" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div>
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Usuario o correo</label>
-          <input name="usuario" required autocomplete="username" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="vendedor@red.com.sv" />
+          <input name="usuario" required autocomplete="username" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="usuario o correo" />
         </div>
         <div>
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Contraseña</label>
@@ -353,12 +360,16 @@ function renderSellerLogin() {
     const btn = e.target.querySelector('button');
     if (btn) btn.disabled = true;
     try {
-      const user = await login(String(fd.get('usuario')).trim(), fd.get('password'), 'vendedor');
+      const user = await login(String(fd.get('usuario')).trim(), fd.get('password'), '');
       if (!user) {
-        showToast('Credenciales inválidas o sin acceso de vendedor.', 'err');
+        showToast('Credenciales inválidas.', 'err');
         return;
       }
       locationPrompted = false;
+      if (user.rol === 'admin') {
+        go('/admin', { replace: true });
+        return;
+      }
       if (btn) btn.textContent = 'Solicitando ubicación…';
       await ensureSellerLocationGate();
       go('/', { replace: true });
@@ -367,49 +378,6 @@ function renderSellerLogin() {
         btn.disabled = false;
         btn.textContent = 'Ingresar';
       }
-    }
-  });
-}
-
-function renderAdminLogin() {
-  app.innerHTML = shell(
-    `
-    <div class="mx-auto mt-8 max-w-md">
-      <div class="mb-8 text-center">
-        <img src="/logo-red.png" alt="RED" class="mx-auto mb-4 h-24 w-24 object-contain" />
-        <h1 class="text-2xl font-black tracking-tight text-slate-900">Administración</h1>
-        <p class="mt-2 text-sm text-slate-500">Acceso restringido a configuración</p>
-      </div>
-      <form id="login-form" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Usuario o correo administrador</label>
-          <input name="usuario" required autocomplete="username" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="admin@red.com.sv" />
-        </div>
-        <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Contraseña</label>
-          <input name="password" type="password" required autocomplete="current-password" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20" placeholder="••••••••" />
-        </div>
-        <button class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg hover:bg-red-700">Ingresar</button>
-      </form>
-    </div>
-    `,
-    { title: 'Admin' }
-  );
-
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const btn = e.target.querySelector('button');
-    if (btn) btn.disabled = true;
-    try {
-      const user = await login(String(fd.get('usuario')).trim(), fd.get('password'), 'admin');
-      if (!user) {
-        showToast('Credenciales inválidas o sin acceso de administrador.', 'err');
-        return;
-      }
-      go('/admin', { replace: true });
-    } finally {
-      if (btn) btn.disabled = false;
     }
   });
 }
@@ -449,6 +417,7 @@ function clientFieldsHtml({
   phoneLabel = 'Teléfono',
   items = null,
   withContactPicker = false,
+  freeForm = false,
 } = {}) {
   const phoneBlock = phoneField
     ? field(phoneLabel, phoneField, {
@@ -459,9 +428,9 @@ function clientFieldsHtml({
       })
     : '';
 
-  if (!isCatalogoClientesActivo() && !items) {
+  if (freeForm || (!isCatalogoClientesActivo() && !items)) {
     return `
-      ${field('Cliente', nameField, { placeholder: 'Nombre de la empresa o cliente', value: selected })}
+      ${field('Cliente / prospecto', nameField, { placeholder: 'Nombre de la empresa o cliente', value: selected })}
       ${field(contactLabel, contactField, { placeholder: 'Persona de contacto', required: false, value: contactValue })}
       ${phoneBlock}
     `;
@@ -839,9 +808,13 @@ function renderSalida() {
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">¿A quién va a visitar?</label>
           <select id="tipo-destino" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
             <option value="cliente" ${tipoDestino === 'cliente' ? 'selected' : ''}>Cliente de mi cartera</option>
-            <option value="prospecto" ${tipoDestino === 'prospecto' ? 'selected' : ''}>Prospecto</option>
+            <option value="prospecto" ${tipoDestino === 'prospecto' ? 'selected' : ''}>Prospecto (libre)</option>
           </select>
-          ${tipoDestino === 'prospecto' && !destinoItems.length ? '<p class="mt-1 text-[11px] text-amber-700">Aún no tiene prospectos. Cree uno en <strong>Prospectos</strong> desde el inicio.</p>' : ''}
+          ${
+            tipoDestino === 'prospecto'
+              ? '<p class="mt-1 text-[11px] text-slate-500">Complete nombre, contacto y teléfono a mano. No usa la cartera.</p>'
+              : ''
+          }
         </div>`
       }
       ${clientFieldsHtml({
@@ -851,8 +824,9 @@ function renderSalida() {
         selected: cita?.clienteNombre || '',
         contactValue: cita?.contacto || '',
         phoneValue: cita?.telefono || '',
-        items: cita ? null : destinoItems,
+        items: cita ? null : tipoDestino === 'prospecto' ? null : destinoItems,
         withContactPicker: tipoDestino === 'cliente' && !cita,
+        freeForm: !cita && tipoDestino === 'prospecto',
       })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
@@ -873,18 +847,6 @@ function renderSalida() {
   document.getElementById('tipo-destino')?.addEventListener('change', (e) => {
     go(`/salida?tipo=${encodeURIComponent(e.target.value)}`, { replace: true, animate: false });
   });
-  if (tipoDestino === 'prospecto') {
-    const formSalida = document.getElementById('form-salida');
-    const sel = formSalida.querySelector('[name="cliente_registro_salida"]');
-    sel?.addEventListener('change', () => {
-      const opt = sel.selectedOptions[0];
-      if (!opt) return;
-      formSalida.querySelector('[name="contacto_registro_salida"]').value = opt.dataset.contacto || '';
-      formSalida.querySelector('[name="telefono_registro_salida"]').value = opt.dataset.telefono || '';
-      const punto = formSalida.querySelector('[name="punto_referencia"]');
-      if (punto && opt.dataset.ubicacion) punto.value = opt.dataset.ubicacion;
-    });
-  }
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
     const esNuevo = String(data._contacto_nuevo || '') === '1';
@@ -1082,9 +1044,9 @@ function renderVisitaForm(salidaId) {
             : `<p class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500">Reintegro de combustible desactivado: este reporte no calcula transporte ni pago.</p>`
         }
         <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica <span class="font-semibold normal-case tracking-normal text-slate-400">(opcional)</span></label>
-          <input name="foto" type="file" accept="image/*" capture="environment" class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm" />
-          <p class="mt-1.5 text-[11px] leading-relaxed text-slate-400">Si no adjunta imagen, el reporte se envía sin evidencia.</p>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Evidencia fotográfica <span class="font-semibold normal-case tracking-normal text-red-600">*</span></label>
+          <input name="foto" type="file" accept="image/*" capture="environment" required class="w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm" />
+          <p class="mt-1.5 text-[11px] leading-relaxed text-slate-400">Obligatoria. Tome o adjunte una foto al cerrar la visita.</p>
         </div>
       </div>
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-4 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Reportar visita</button>
@@ -1106,14 +1068,20 @@ function renderVisitaForm(salidaId) {
     if (fuelOn && (!transporte || !pago)) {
       throw new Error('Su perfil no tiene transporte o pago asignados. Contacte al administrador.');
     }
+    const file = form.querySelector('input[name="foto"]').files?.[0] || null;
+    if (!file) {
+      throw new Error('Debe adjuntar una fotografía para cerrar la visita.');
+    }
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
-    const file = form.querySelector('input[name="foto"]').files?.[0] || null;
-    let foto = null;
-    if (file) {
-      btn.textContent = 'Procesando imagen…';
-      foto = await fileToDataUrl(file);
-    }
+    btn.textContent = 'Procesando imagen…';
+    const foto = await fileToDataUrl(file);
+    const km = distanceKm(
+      current.latitud_registro_salidas,
+      current.longitud_registro_salidas,
+      gps.latitud,
+      gps.longitud
+    );
     btn.textContent = 'Enviando…';
     const result = await sendToMake({
       formulario: 'reportes_visitas',
@@ -1145,14 +1113,24 @@ function renderVisitaForm(salidaId) {
       latitud_reporte_visitas: gps.latitud,
       longitud_reporte_visitas: gps.longitud,
       gps_accuracy_visita: gps.accuracy,
+      distancia_km: km,
       galeria_fotos_reporte_visitas: foto,
     });
     markSalidaVisitada(salidaId, {
       reporte_tardio: esTardio,
       fecha_reporte_real: nowParts().fecha,
       dias_retraso: diasRetraso,
+      latitud_reporte_visitas: gps.latitud,
+      longitud_reporte_visitas: gps.longitud,
+      gps_accuracy_visita: gps.accuracy,
+      distancia_km: km,
+      tipo_visita: data.tipo_visita,
+      informe_visitas: data.informe_visitas,
+      tiene_evidencia: true,
     });
-    showToast(`${result.message} GPS visita: ${gps.latitud}, ${gps.longitud}`);
+    showToast(
+      `${result.message}${km != null ? ` · ${km} km` : ''} · GPS visita: ${gps.latitud}, ${gps.longitud}`
+    );
     go('/visita');
   });
 }
@@ -1322,15 +1300,20 @@ function renderDashboard() {
   const state = getState();
   const rows = ejecutivos.map((u) => {
     const salidas = (state.salidas || []).filter((s) => s.vendedorId === u.id);
-    const visitadas = salidas.filter((s) => s.estado === 'visitada').length;
+    const visitadasList = salidas.filter((s) => s.estado === 'visitada');
+    const kmTotal = visitadasList.reduce(
+      (sum, s) => sum + (Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0),
+      0
+    );
     return {
       nombre: u.nombre,
       pais: u.pais || '',
       clientes: getClientsByVendedor(u.id).filter((c) => c.tipo !== 'prospecto').length,
       salidas: salidas.length,
-      visitadas,
-      pendientes: salidas.length - visitadas,
+      visitadas: visitadasList.length,
+      pendientes: salidas.length - visitadasList.length,
       citas: getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
+      km: Math.round(kmTotal * 100) / 100,
     };
   });
   const tot = rows.reduce(
@@ -1338,8 +1321,9 @@ function renderDashboard() {
       salidas: a.salidas + r.salidas,
       visitadas: a.visitadas + r.visitadas,
       pendientes: a.pendientes + r.pendientes,
+      km: a.km + r.km,
     }),
-    { salidas: 0, visitadas: 0, pendientes: 0 }
+    { salidas: 0, visitadas: 0, pendientes: 0, km: 0 }
   );
   const card = (label, value) => `
     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1349,14 +1333,36 @@ function renderDashboard() {
 
   app.innerHTML = shell(
     `
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
       ${card('Ejecutivos', rows.length)}
-      ${card('Salidas registradas', tot.salidas)}
-      ${card('Visitas reportadas', tot.visitadas)}
+      ${card('Salidas', tot.salidas)}
+      ${card('Visitas', tot.visitadas)}
       ${card('Pendientes', tot.pendientes)}
+      ${card('Km reportados', Math.round(tot.km * 100) / 100)}
     </div>
-    <section class="mt-5 overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <table class="w-full min-w-[640px] text-left text-sm">
+    <section class="mt-5 space-y-3 sm:hidden">
+      ${
+        rows.length
+          ? rows
+              .map(
+                (r) => `
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="font-black text-slate-900">${escapeHtml(r.nombre)}</div>
+          <p class="mt-1 text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes</p>
+          <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div class="rounded-xl bg-slate-50 px-3 py-2">Salidas <strong class="block text-sm">${r.salidas}</strong></div>
+            <div class="rounded-xl bg-emerald-50 px-3 py-2 text-emerald-800">Visitas <strong class="block text-sm">${r.visitadas}</strong></div>
+            <div class="rounded-xl bg-amber-50 px-3 py-2 text-amber-800">Pendientes <strong class="block text-sm">${r.pendientes}</strong></div>
+            <div class="rounded-xl bg-slate-50 px-3 py-2">Km <strong class="block text-sm">${r.km}</strong></div>
+          </div>
+        </div>`
+              )
+              .join('')
+          : '<p class="text-sm text-slate-400">Sin ejecutivos en el alcance.</p>'
+      }
+    </section>
+    <section class="mt-5 hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm sm:block">
+      <table class="w-full text-left text-sm">
         <thead>
           <tr class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
             <th class="px-4 py-3 font-bold">Ejecutivo</th>
@@ -1365,7 +1371,8 @@ function renderDashboard() {
             <th class="px-4 py-3 font-bold">Salidas</th>
             <th class="px-4 py-3 font-bold">Reportadas</th>
             <th class="px-4 py-3 font-bold">Pendientes</th>
-            <th class="px-4 py-3 font-bold">Citas prog.</th>
+            <th class="px-4 py-3 font-bold">Km</th>
+            <th class="px-4 py-3 font-bold">Citas</th>
           </tr>
         </thead>
         <tbody>
@@ -1381,18 +1388,19 @@ function renderDashboard() {
               <td class="px-4 py-3 text-slate-600">${r.salidas}</td>
               <td class="px-4 py-3 text-emerald-700 font-semibold">${r.visitadas}</td>
               <td class="px-4 py-3 ${r.pendientes ? 'text-amber-700 font-semibold' : 'text-slate-600'}">${r.pendientes}</td>
+              <td class="px-4 py-3 text-slate-600">${r.km}</td>
               <td class="px-4 py-3 text-slate-600">${r.citas}</td>
             </tr>`
                   )
                   .join('')
-              : '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">Sin ejecutivos en el alcance.</td></tr>'
+              : '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400">Sin ejecutivos en el alcance.</td></tr>'
           }
         </tbody>
       </table>
     </section>
-    <p class="mt-3 text-[11px] text-slate-400">Los kilómetros por ejecutivo se calculan en Make y quedan en Sheets (columnas O y P de Reporte de Visitas).</p>
+    <p class="mt-3 text-[11px] text-slate-400">Los km se calculan en la plataforma (GPS salida → GPS visita) al cerrar cada reporte.</p>
     `,
-    { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/' }
+    { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/', wide: true }
   );
   if (isAdmin) bindAdminSubShell();
   else bindShell('/');
@@ -1750,11 +1758,11 @@ function renderAdminHub() {
     `,
     { title: 'Administración' }
   );
-  bindShell('/admin/login');
+  bindShell('/');
 }
 
 function bindAdminSubShell() {
-  bindShell('/admin/login');
+  bindShell('/');
 }
 
 function renderAdminConfig() {
@@ -2492,39 +2500,65 @@ function renderAdminUsuarios() {
   const sinPais = state.users.filter((u) => !u.pais).length;
   const visibleUsers =
     paisSel === 'XX' ? state.users.filter((u) => !u.pais) : state.users.filter((u) => u.pais === paisSel);
+  const userActions = (u) => `
+    <div class="flex flex-wrap gap-x-3 gap-y-1">
+      <button data-edit="${u.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
+      <button data-reset="${u.id}" class="text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Clave</button>
+      ${
+        u.rol === 'vendedor'
+          ? `<button data-cartera="${u.id}" class="text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Cartera</button>`
+          : ''
+      }
+      ${
+        u.usuario !== 'admin'
+          ? `<button data-del="${u.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>`
+          : ''
+      }
+    </div>`;
+
+  const usersCards = visibleUsers
+    .map(
+      (u) => `
+      <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-sm font-black text-slate-900">${escapeHtml(u.nombre)}</div>
+            <div class="mt-0.5 text-xs font-semibold text-slate-500">${escapeHtml(u.usuario)}</div>
+          </div>
+          <span class="rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
+        </div>
+        <dl class="mt-3 space-y-1.5 text-xs text-slate-600">
+          <div><span class="font-bold text-slate-400">Correo</span><div>${escapeHtml(u.correo || '—')}</div></div>
+          <div><span class="font-bold text-slate-400">Jefe</span><div>${escapeHtml(u.correo_jefe || '—')}</div></div>
+          <div class="flex items-center justify-between gap-3 pt-1">
+            <span class="capitalize font-semibold text-slate-800">${escapeHtml(u.rol)}</span>
+            <span class="inline-flex items-center gap-2 text-[11px] font-bold text-slate-500">Combustible ${iosSwitch('combustible_row', u.combustible_activo, {
+              dataAttr: `data-toggle-fuel="${u.id}"`,
+            })}</span>
+          </div>
+          <div class="text-[11px] text-slate-500">Pago: ${escapeHtml(u.pago_combustible_default || '—')}</div>
+        </dl>
+        <div class="mt-3 border-t border-slate-100 pt-3">${userActions(u)}</div>
+      </article>`
+    )
+    .join('');
+
   const usersRows = visibleUsers
     .map(
       (u) => `
-      <tr class="border-t border-slate-100 hover:bg-slate-50/80">
-        <td class="px-2.5 py-1.5 text-sm font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(u.usuario)}</td>
-        <td class="px-2.5 py-1.5 text-sm text-slate-700">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span>${escapeHtml(u.nombre)}</span>
-            <span class="rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
-          </div>
+      <tr class="border-t border-slate-100 align-top hover:bg-slate-50/80">
+        <td class="px-3 py-2.5 text-sm font-semibold text-slate-900">${escapeHtml(u.usuario)}</td>
+        <td class="px-3 py-2.5 text-sm text-slate-700">
+          <div>${escapeHtml(u.nombre)}</div>
+          <span class="mt-1 inline-flex rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
         </td>
-        <td class="px-2.5 py-1.5 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(u.correo || '—')}</td>
-        <td class="px-2.5 py-1.5 text-sm text-slate-600 whitespace-nowrap">${escapeHtml(u.correo_jefe || '—')}</td>
-        <td class="px-2.5 py-1.5 text-sm capitalize text-slate-700">${escapeHtml(u.rol)}</td>
-        <td class="px-2.5 py-1.5">
-          ${iosSwitch('combustible_row', u.combustible_activo, {
-            dataAttr: `data-toggle-fuel="${u.id}"`,
-          })}
-        </td>
-        <td class="px-2.5 py-1.5 text-right whitespace-nowrap">
-          <button data-edit="${u.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
-          <button data-reset="${u.id}" class="ml-2 text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Restablecer clave</button>
-          ${
-            u.rol === 'vendedor'
-              ? `<button data-cartera="${u.id}" class="ml-2 text-xs font-bold text-slate-600 hover:text-red-600 hover:underline">Cartera</button>`
-              : ''
-          }
-          ${
-            u.usuario !== 'admin'
-              ? `<button data-del="${u.id}" class="ml-2 text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>`
-              : ''
-          }
-        </td>
+        <td class="px-3 py-2.5 text-sm text-slate-600">${escapeHtml(u.correo || '—')}</td>
+        <td class="px-3 py-2.5 text-sm capitalize text-slate-700">${escapeHtml(u.rol)}</td>
+        <td class="px-3 py-2.5 text-xs text-slate-600">${escapeHtml(u.pago_combustible_default || '—')}</td>
+        <td class="px-3 py-2.5">${iosSwitch('combustible_row', u.combustible_activo, {
+          dataAttr: `data-toggle-fuel="${u.id}"`,
+        })}</td>
+        <td class="px-3 py-2.5">${userActions(u)}</td>
       </tr>`
     )
     .join('');
@@ -2554,22 +2588,25 @@ function renderAdminUsuarios() {
               ? `<button data-nav="/admin/usuarios?pais=XX" class="rounded-full border px-3 py-1.5 text-xs font-bold transition ${paisSel === 'XX' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-500 hover:border-red-200'}">Sin país · ${sinPais}</button>`
               : ''
           }
-          <span class="ml-auto text-xs font-semibold text-slate-500">${paisLabel} · ${visibleUsers.length} usuario${visibleUsers.length === 1 ? '' : 's'}</span>
+          <span class="ml-auto text-xs font-semibold text-slate-500">${paisLabel} · ${visibleUsers.length}</span>
         </div>
-        <div class="w-full">
-          <table class="w-full table-auto text-left">
+        <div class="grid gap-3 lg:hidden">
+          ${usersCards || '<p class="text-sm text-slate-400">Sin usuarios en este país.</p>'}
+        </div>
+        <div class="hidden lg:block">
+          <table class="w-full table-fixed text-left">
             <thead class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
               <tr>
-                <th class="px-2.5 py-2 font-bold">Usuario</th>
-                <th class="px-2.5 py-2 font-bold">Nombre</th>
-                <th class="px-2.5 py-2 font-bold">Correo</th>
-                <th class="px-2.5 py-2 font-bold">Correo jefe</th>
-                <th class="px-2.5 py-2 font-bold">Rol</th>
-                <th class="px-2.5 py-2 font-bold">Combustible</th>
-                <th class="px-2.5 py-2 font-bold"></th>
+                <th class="w-[14%] px-3 py-2 font-bold">Usuario</th>
+                <th class="w-[18%] px-3 py-2 font-bold">Nombre</th>
+                <th class="w-[20%] px-3 py-2 font-bold">Correo</th>
+                <th class="w-[10%] px-3 py-2 font-bold">Rol</th>
+                <th class="w-[14%] px-3 py-2 font-bold">Pago</th>
+                <th class="w-[10%] px-3 py-2 font-bold">Comb.</th>
+                <th class="w-[14%] px-3 py-2 font-bold">Acciones</th>
               </tr>
             </thead>
-            <tbody>${usersRows || '<tr><td colspan="7" class="px-2.5 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
+            <tbody>${usersRows || '<tr><td colspan="7" class="px-3 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
           </table>
         </div>
       </section>
@@ -2743,6 +2780,8 @@ function renderAdminUsuarios() {
     picks.tipos_transporte = [];
     picks.tipos_pago = [];
 
+    const pagoAsignado = String(fd.get('pago_combustible_default') || '').trim();
+    const esLegacy = pagoAsignado === LEGACY_PAGO_LABEL;
     upsertUser({
       id: fd.get('id'),
       usuario: String(fd.get('usuario')).trim(),
@@ -2754,13 +2793,13 @@ function renderAdminUsuarios() {
       correo: String(fd.get('correo') || '').trim(),
       correo_jefe: String(fd.get('correo_jefe') || '').trim(),
       rol: fd.get('rol'),
-      combustible_activo: fd.get('combustible_activo') === 'on',
+      combustible_activo: esLegacy ? false : fd.get('combustible_activo') === 'on',
       activo: fd.get('activo') === 'on',
       transporte_default: String(fd.get('transporte_default') || '').trim(),
-      pago_combustible_default: String(fd.get('pago_combustible_default') || '').trim(),
+      pago_combustible_default: pagoAsignado,
       ...picks,
     });
-    showToast('Usuario guardado.');
+    showToast(esLegacy ? 'Usuario guardado (Legacy Intelfon: sin combustible).' : 'Usuario guardado.');
     render();
   });
 }
@@ -2803,23 +2842,17 @@ function render() {
   const user = state.session;
 
   if (path === '/admin/login') {
-    if (user?.rol === 'admin') {
-      go('/admin', { replace: true, animate: false });
-      return;
-    }
-    if (user?.rol === 'vendedor') void logout();
-    renderAdminLogin();
+    go(user?.rol === 'admin' ? '/admin' : '/', { replace: true, animate: false });
     return;
   }
 
   if (path === '/admin' || path.startsWith('/admin/')) {
     if (!user) {
-      go('/admin/login', { replace: true, animate: false });
+      go('/', { replace: true, animate: false });
       return;
     }
     if (user.rol !== 'admin') {
-      void logout();
-      go('/admin/login', { replace: true, animate: false });
+      go(homeForRole(user), { replace: true, animate: false });
       return;
     }
     routeAdmin(path);
@@ -2836,7 +2869,7 @@ function render() {
       go('/', { replace: true, animate: false });
       return;
     }
-    renderSellerLogin();
+    renderLogin();
     return;
   }
 

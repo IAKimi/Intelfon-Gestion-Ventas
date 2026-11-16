@@ -38,9 +38,11 @@ async function request(path, { method = 'GET', body } = {}) {
 }
 
 export async function apiLogin(usuario, password, rol) {
+  const body = { usuario, password };
+  if (rol) body.rol = rol;
   return request('/api/auth/login', {
     method: 'POST',
-    body: { usuario, password, rol },
+    body,
   });
 }
 

@@ -34,6 +34,7 @@ const DEFAULT_CATALOGOS = {
     { id: 'trans-carro', label: 'Carro', activo: true },
   ],
   tipos_pago: [
+    { id: 'pago-legacy', label: 'Legacy Intelfon', activo: true },
     { id: 'pago-conteo', label: 'Pago por conteo', activo: true },
     { id: 'pago-km', label: 'Pago por kilometraje', activo: true },
   ],

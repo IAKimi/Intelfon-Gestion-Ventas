@@ -55,6 +55,7 @@ function emptyEnvelope() {
     latitud_reporte_visitas: '',
     longitud_reporte_visitas: '',
     gps_accuracy_visita: null,
+    distancia_km: null,
     galeria_fotos_reporte_visitas: null,
     tiene_evidencia: false,
 

@@ -30,10 +30,13 @@ const DEFAULT_CATALOGOS = {
     { id: 'trans-carro', label: 'Carro', activo: true },
   ],
   tipos_pago: [
+    { id: 'pago-legacy', label: 'Legacy Intelfon', activo: true },
     { id: 'pago-conteo', label: 'Pago por conteo', activo: true },
     { id: 'pago-km', label: 'Pago por kilometraje', activo: true },
   ],
 };
+
+export const LEGACY_PAGO_LABEL = 'Legacy Intelfon';
 
 const DEFAULT_STATE = {
   combustibleGlobal: true,
@@ -78,14 +81,14 @@ const DEFAULT_STATE = {
       correo: 'vendedor@red.com.sv',
       correo_jefe: 'admin@red.com.sv',
       rol: 'vendedor',
-      combustible_activo: true,
+      combustible_activo: false,
       activo: true,
       tipos_salida: [],
       tipos_visita: [],
       tipos_transporte: [],
       tipos_pago: [],
       transporte_default: 'Moto',
-      pago_combustible_default: 'Pago por conteo',
+      pago_combustible_default: LEGACY_PAGO_LABEL,
     },
   ],
 };
@@ -226,14 +229,40 @@ function normalizeCatalogos(raw) {
   if (!raw || typeof raw !== 'object') return base;
   for (const key of Object.keys(base)) {
     if (Array.isArray(raw[key]) && raw[key].length) {
-      base[key] = raw[key].map((x) => ({
+      const mapped = raw[key].map((x) => ({
         id: x.id || createId('cat'),
         label: String(x.label || '').trim() || 'Sin nombre',
         activo: x.activo !== false,
       }));
+      const seen = new Set(mapped.map((x) => x.id));
+      for (const def of DEFAULT_CATALOGOS[key] || []) {
+        if (!seen.has(def.id)) mapped.unshift({ ...def });
+      }
+      base[key] = mapped;
     }
   }
   return base;
+}
+
+/** Distancia en km (haversine) entre dos coords; null si faltan datos. */
+export function distanceKm(lat1, lon1, lat2, lon2) {
+  const a1 = Number(lat1);
+  const o1 = Number(lon1);
+  const a2 = Number(lat2);
+  const o2 = Number(lon2);
+  if (![a1, o1, a2, o2].every((n) => Number.isFinite(n))) return null;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(a2 - a1);
+  const dLon = toRad(o2 - o1);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * Math.sin(dLon / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)) * 100) / 100;
+}
+
+export function isLegacyPago(user) {
+  return String(user?.pago_combustible_default || '').trim() === LEGACY_PAGO_LABEL;
 }
 
 function omitSession(state) {
@@ -445,11 +474,11 @@ function matchesLogin(u, login) {
   );
 }
 
-/** @param {'admin' | 'vendedor' | 'jefe'} expectedRole */
-export async function login(usuario, password, expectedRole) {
+/** @param {'admin' | 'vendedor' | 'jefe' | ''} [expectedRole] vacío = cualquier rol activo */
+export async function login(usuario, password, expectedRole = '') {
   if (remoteMode) {
     try {
-      const data = await apiLogin(usuario, password, expectedRole);
+      const data = await apiLogin(usuario, password, expectedRole || undefined);
       setToken(data.token);
       applyRemotePayload(data.state, data.user);
       setSession(data.user);
@@ -461,6 +490,7 @@ export async function login(usuario, password, expectedRole) {
 
   const state = getState();
   const roleOk = (rol) => {
+    if (!expectedRole) return true;
     if (expectedRole === 'admin') return rol === 'admin';
     if (expectedRole === 'vendedor') return rol === 'vendedor' || rol === 'jefe';
     return rol === expectedRole;
@@ -489,6 +519,7 @@ export async function logout() {
 }
 
 export function resolveCombustible(user) {
+  if (isLegacyPago(user)) return false;
   const state = getState();
   if (state.combustibleGlobal) return true;
   return Boolean(user?.combustible_activo);
@@ -655,7 +686,7 @@ function findOrCreateEjecutivo(state, nombre, pais) {
     tipos_transporte: [],
     tipos_pago: [],
     transporte_default: 'Moto',
-    pago_combustible_default: 'Pago por conteo',
+    pago_combustible_default: LEGACY_PAGO_LABEL,
   });
   state.users.push(user);
   return user;
@@ -1077,13 +1108,30 @@ export function markSalidaVisitada(id, extra = {}) {
   if (!Array.isArray(state.salidas)) state.salidas = [];
   const idx = state.salidas.findIndex((s) => s.id === id);
   if (idx < 0) return getState();
+  const prev = state.salidas[idx];
+  const km =
+    extra.distancia_km != null
+      ? Number(extra.distancia_km)
+      : distanceKm(
+          prev.latitud_registro_salidas,
+          prev.longitud_registro_salidas,
+          extra.latitud_reporte_visitas,
+          extra.longitud_reporte_visitas
+        );
   state.salidas[idx] = {
-    ...state.salidas[idx],
+    ...prev,
     estado: 'visitada',
     visitedAt: new Date().toISOString(),
     reporte_tardio: Boolean(extra.reporte_tardio),
     fecha_reporte_real: extra.fecha_reporte_real || '',
     dias_retraso: extra.dias_retraso || 0,
+    latitud_reporte_visitas: extra.latitud_reporte_visitas || prev.latitud_reporte_visitas || '',
+    longitud_reporte_visitas: extra.longitud_reporte_visitas || prev.longitud_reporte_visitas || '',
+    gps_accuracy_visita: extra.gps_accuracy_visita ?? prev.gps_accuracy_visita ?? null,
+    distancia_km: Number.isFinite(km) ? km : null,
+    tipo_visita: extra.tipo_visita || prev.tipo_visita || '',
+    informe_visitas: extra.informe_visitas || prev.informe_visitas || '',
+    tiene_evidencia: Boolean(extra.tiene_evidencia ?? prev.tiene_evidencia),
   };
   save(state);
   return getState();
