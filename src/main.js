@@ -1314,6 +1314,7 @@ function renderDashboard() {
   const isAdmin = user.rol === 'admin';
   const state = getState();
   const params = new URLSearchParams(location.search);
+  const tabSel = params.get('tab') === 'ejecutivos' ? 'ejecutivos' : 'global';
   const paisSel = params.get('pais') || '';
   const ejecutivoSel = params.get('ejecutivo') || '';
   const desde = params.get('desde') || '';
@@ -1442,7 +1443,15 @@ function renderDashboard() {
 
   const buildQuery = (extra = {}) => {
     const q = new URLSearchParams();
-    const merged = { pais: paisSel, ejecutivo: ejecutivoSel, desde, hasta, ...extra };
+    const merged = {
+      tab: tabSel,
+      pais: paisSel,
+      ejecutivo: ejecutivoSel,
+      desde,
+      hasta,
+      ...extra,
+    };
+    if (merged.tab && merged.tab !== 'global') q.set('tab', merged.tab);
     for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
       const v = String(merged[key] || '').trim();
       if (v) q.set(key, v);
@@ -1457,7 +1466,7 @@ function renderDashboard() {
   const d30 = dashIsoDay(-29);
 
   const kpi = (title, value, help) => `
-    <div class="min-w-[9.5rem] flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">${title}</div>
       <div class="mt-1 text-2xl font-black tabular-nums text-slate-900">${value}</div>
       <p class="mt-1 text-[11px] leading-snug text-slate-500">${help}</p>
@@ -1485,55 +1494,10 @@ function renderDashboard() {
         </div>`
       : '';
 
-  app.innerHTML = shell(
-    `
-    <div class="mb-4">
-      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">¿Cómo va el trabajo de campo?</h2>
-      <p class="mt-1 max-w-3xl text-sm text-slate-500">Resumen simple: cuántas salidas hubo, cuántas visitas se cerraron, cuántos kilómetros se recorrieron y cómo está cada ejecutivo. Filtre por país, persona o fechas.</p>
-    </div>
-
-    <div class="mb-3 flex flex-wrap gap-2">
-      <button data-nav="${escapeHtml(buildQuery({ desde: hoy, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
-      <button data-nav="${escapeHtml(buildQuery({ desde: d7, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d7, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 7 días</button>
-      <button data-nav="${escapeHtml(buildQuery({ desde: d30, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d30, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 30 días</button>
-      <button data-nav="${escapeHtml(buildQuery({ desde: '', hasta: '' }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
-    </div>
-
-    <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
-      <div>
-        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">País</label>
-        <select name="pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">Todos</option>
-          <option value="SV" ${paisSel === 'SV' ? 'selected' : ''}>El Salvador</option>
-          <option value="GT" ${paisSel === 'GT' ? 'selected' : ''}>Guatemala</option>
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Ejecutivo</label>
-        <select name="ejecutivo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">Todos</option>
-          ${allEjecOptions}
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Desde</label>
-        <input type="date" name="desde" value="${escapeHtml(desde)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
-      </div>
-      <div>
-        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Hasta</label>
-        <input type="date" name="hasta" value="${escapeHtml(hasta)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
-      </div>
-      <div class="flex items-end gap-2">
-        <button class="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white hover:bg-red-700">Aplicar</button>
-        <button type="button" id="dash-clear" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Limpiar</button>
-      </div>
-    </form>
-
+  const globalBody = `
     ${emptyHint}
-
     <div class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Totales del periodo</div>
-    <div class="flex gap-3 overflow-x-auto pb-2">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
       ${kpi('Salidas', salidasAll.length, 'Veces que un vendedor registró “voy a salir”.')}
       ${kpi('Visitas hechas', visitadas.length, 'Salidas ya cerradas con reporte.')}
       ${kpi('Pendientes', pendientes.length, 'Salieron y aún no reportaron.')}
@@ -1541,9 +1505,6 @@ function renderDashboard() {
       ${kpi('Km totales', Math.round(kmTotal * 100) / 100, 'Suma de kilómetros GPS de las visitas.')}
       ${kpi('Km promedio', kmAvg, 'Kilómetros típicos por visita cerrada.')}
       ${kpi('Con foto', conFoto, 'Visitas que sí llevaron evidencia.')}
-    </div>
-
-    <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
       ${kpi('Clientes en cartera', clientes, 'Clientes activos de los ejecutivos filtrados.')}
       ${kpi('Prospectos', prospectos, 'Posibles clientes todavía no formales.')}
       ${kpi('Citas agendadas', citasProg, 'Visitas programadas por el jefe, aún sin registrar.')}
@@ -1597,35 +1558,99 @@ function renderDashboard() {
         'Clientes formales vs prospectos de los ejecutivos filtrados.',
         'chart-cartera'
       )}
-    </div>
+    </div>`;
 
-    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-      <h3 class="text-base font-black text-slate-900">Detalle por ejecutivo</h3>
-      <p class="mt-1 text-xs text-slate-500">Lista ordenada por visitas cerradas. Sirve para ver quién está al día y quién tiene pendientes.</p>
-      <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+  const ejecutivosBody = `
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Detalle por ejecutivo</h3>
+          <p class="mt-0.5 text-xs text-slate-500">Lista ordenada por visitas cerradas. Filtre arriba por país o por una persona.</p>
+        </div>
+        <span class="text-xs font-semibold text-slate-500">${rows.length} ejecutivo${rows.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         ${
           rows.length
             ? rows
                 .map(
                   (r) => `
-          <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
-            <div class="font-black text-slate-900 break-words">${escapeHtml(r.nombre)}</div>
-            <p class="text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes · ${r.prospectos} prospectos</p>
-            <div class="mt-2 grid grid-cols-3 gap-2 text-xs">
-              <div>Salidas <strong class="block text-sm">${r.salidas}</strong></div>
-              <div>Visitas <strong class="block text-sm text-emerald-700">${r.visitadas}</strong></div>
-              <div>Pend. <strong class="block text-sm ${r.pendientes ? 'text-amber-700' : ''}">${r.pendientes}</strong></div>
-              <div>Km <strong class="block text-sm">${r.km}</strong></div>
-              <div>Fotos <strong class="block text-sm">${r.fotos}</strong></div>
-              <div>% cierre <strong class="block text-sm">${r.cierre}%</strong></div>
+          <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div class="min-w-0">
+              <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(r.nombre)}</div>
+              <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes · ${r.prospectos} prospectos · ${r.citas} citas</p>
             </div>
-          </div>`
+            <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-600">
+              <div>Salidas<strong class="mt-0.5 block text-sm text-slate-900">${r.salidas}</strong></div>
+              <div>Visitas<strong class="mt-0.5 block text-sm text-emerald-700">${r.visitadas}</strong></div>
+              <div>Pendientes<strong class="mt-0.5 block text-sm ${r.pendientes ? 'text-amber-700' : 'text-slate-900'}">${r.pendientes}</strong></div>
+              <div>Km<strong class="mt-0.5 block text-sm text-slate-900">${r.km}</strong></div>
+              <div>Con foto<strong class="mt-0.5 block text-sm text-slate-900">${r.fotos}</strong></div>
+              <div>% cierre<strong class="mt-0.5 block text-sm text-slate-900">${r.cierre}%</strong></div>
+            </div>
+            <div class="mt-auto border-t border-slate-200/80 pt-3">
+              <button data-nav="${escapeHtml(buildQuery({ tab: 'ejecutivos', ejecutivo: r.id }))}" class="text-xs font-bold text-red-600 hover:underline">Ver solo este ejecutivo</button>
+            </div>
+          </article>`
                 )
                 .join('')
             : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">No hay ejecutivos con estos filtros.</p>'
         }
       </div>
-    </section>
+    </section>`;
+
+  app.innerHTML = shell(
+    `
+    <div class="mb-4">
+      <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">¿Cómo va el trabajo de campo?</h2>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.</p>
+    </div>
+
+    <div class="mb-4 flex flex-wrap gap-2">
+      <button data-nav="${escapeHtml(buildQuery({ tab: 'global' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'global' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Global</button>
+      <button data-nav="${escapeHtml(buildQuery({ tab: 'ejecutivos' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'ejecutivos' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Ejecutivos</button>
+    </div>
+
+    <div class="mb-3 flex flex-wrap gap-2">
+      <button data-nav="${escapeHtml(buildQuery({ desde: hoy, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: d7, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d7, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 7 días</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: d30, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d30, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 30 días</button>
+      <button data-nav="${escapeHtml(buildQuery({ desde: '', hasta: '' }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
+    </div>
+
+    <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
+      <input type="hidden" name="tab" value="${tabSel}" />
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">País</label>
+        <select name="pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Todos</option>
+          <option value="SV" ${paisSel === 'SV' ? 'selected' : ''}>El Salvador</option>
+          <option value="GT" ${paisSel === 'GT' ? 'selected' : ''}>Guatemala</option>
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Ejecutivo</label>
+        <select name="ejecutivo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Todos</option>
+          ${allEjecOptions}
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Desde</label>
+        <input type="date" name="desde" value="${escapeHtml(desde)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div>
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Hasta</label>
+        <input type="date" name="hasta" value="${escapeHtml(hasta)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div class="flex items-end gap-2">
+        <button class="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white hover:bg-red-700">Aplicar</button>
+        <button type="button" id="dash-clear" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Limpiar</button>
+      </div>
+    </form>
+
+    ${tabSel === 'ejecutivos' ? ejecutivosBody : globalBody}
     `,
     { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/', wide: true }
   );
@@ -1637,6 +1662,8 @@ function renderDashboard() {
     e.preventDefault();
     const fd = new FormData(e.target);
     const q = new URLSearchParams();
+    const tab = String(fd.get('tab') || tabSel || 'global');
+    if (tab === 'ejecutivos') q.set('tab', 'ejecutivos');
     for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
       const v = String(fd.get(key) || '').trim();
       if (v) q.set(key, v);
@@ -1644,9 +1671,13 @@ function renderDashboard() {
     go(q.toString() ? `${basePath}?${q}` : basePath, { replace: true, animate: false });
   });
   document.getElementById('dash-clear')?.addEventListener('click', () => {
-    go(basePath, { replace: true, animate: false });
+    go(tabSel === 'ejecutivos' ? `${basePath}?tab=ejecutivos` : basePath, {
+      replace: true,
+      animate: false,
+    });
   });
 
+  if (tabSel !== 'global') return;
   const ChartLib = window.Chart;
   if (!ChartLib) return;
   const grid = { color: 'rgba(148,163,184,0.2)' };
@@ -2290,17 +2321,6 @@ function renderAdminBaseDatos() {
   if (filterVend) clients = clients.filter((c) => c.vendedorId === filterVend);
   if (filterPais) clients = clients.filter((c) => c.pais === filterPais);
 
-  const tab = (id, label) => {
-    const active = view === id;
-    const href =
-      id === 'clientes' && filterVend
-        ? `/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(filterVend)}`
-        : `/admin/base-datos?view=${id}`;
-    return `<a href="${href}" data-nav class="rounded-full px-3 py-1.5 text-xs font-bold ${
-      active ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-600'
-    }">${label}</a>`;
-  };
-
   const sellerOpts = ejecutivos
     .map(
       (u) =>
@@ -2310,13 +2330,29 @@ function renderAdminBaseDatos() {
     )
     .join('');
 
+  const viewTitle =
+    view === 'ejecutivos' ? 'Ejecutivos' : view === 'clientes' ? 'Clientes' : 'Importar';
+  const viewHelp =
+    view === 'ejecutivos'
+      ? 'Vendedores por país y tamaño de cartera.'
+      : view === 'clientes'
+        ? 'Cartera completa SV / GT, filtrable por ejecutivo.'
+        : 'Carga masiva de Excel o CSV.';
+
+  const sectionTabs = `
+    <div class="mb-4 flex flex-wrap gap-2">
+      <button data-nav="/admin/base-datos?view=ejecutivos" class="rounded-full border px-3 py-1.5 text-xs font-bold ${view === 'ejecutivos' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Ejecutivos</button>
+      <button data-nav="/admin/base-datos?view=clientes" class="rounded-full border px-3 py-1.5 text-xs font-bold ${view === 'clientes' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Clientes</button>
+      <button data-nav="/admin/base-datos?view=importar" class="rounded-full border px-3 py-1.5 text-xs font-bold ${view === 'importar' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Importar</button>
+    </div>`;
+
   app.innerHTML = shell(
     `
     <div class="mb-4">
-      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos · ${view === 'ejecutivos' ? 'Ejecutivos' : view === 'clientes' ? 'Clientes' : 'Importar'}</h3>
-      <p class="mt-1 text-xs text-slate-500">Ejecutivos, carteras e importación masiva (SV / GT).</p>
-      <button data-nav="/admin/base-datos" class="mt-2 text-xs font-bold text-red-600 hover:underline">← Cambiar sección</button>
+      <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Base de datos · ${viewTitle}</h3>
+      <p class="mt-1 text-xs text-slate-500">${viewHelp}</p>
     </div>
+    ${sectionTabs}
 
     ${
       view === 'importar'
@@ -2350,15 +2386,15 @@ function renderAdminBaseDatos() {
     ${
       view === 'ejecutivos'
         ? `
-    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div class="flex-1">
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div class="mb-3 grid gap-2 sm:grid-cols-3">
+        <div class="sm:col-span-1">
           <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Buscar</label>
           <input id="filter-eq" value="${escapeHtml(params.get('eq') || '')}" placeholder="Nombre, usuario o correo" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
         </div>
         <div>
           <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">País</label>
-          <select id="filter-epais" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <select id="filter-epais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
             <option value="">Todos</option>
             <option value="SV" ${ePais === 'SV' ? 'selected' : ''}>El Salvador</option>
             <option value="GT" ${ePais === 'GT' ? 'selected' : ''}>Guatemala</option>
@@ -2366,47 +2402,47 @@ function renderAdminBaseDatos() {
         </div>
         <div>
           <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Orden</label>
-          <select id="filter-orden" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <select id="filter-orden" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
             <option value="nombre" ${eOrden === 'nombre' ? 'selected' : ''}>Por nombre</option>
             <option value="mas" ${eOrden === 'mas' ? 'selected' : ''}>Más clientes</option>
             <option value="menos" ${eOrden === 'menos' ? 'selected' : ''}>Menos clientes</option>
           </select>
         </div>
       </div>
-      <p class="mb-2 text-xs text-slate-500">${ejecutivos.length} ejecutivo${ejecutivos.length === 1 ? '' : 's'}</p>
-      <div class="max-h-[32rem] overflow-y-auto">
-        <table class="min-w-full text-left text-sm">
-          <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
-            <tr>
-              <th class="px-3 py-2">País</th>
-              <th class="px-3 py-2">Ejecutivo</th>
-              <th class="px-3 py-2">Usuario</th>
-              <th class="px-3 py-2">Clientes</th>
-              <th class="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              ejecutivos.length
-                ? ejecutivos
-                    .map((u) => {
-                      const n = u._clientes;
-                      return `
-              <tr class="border-t border-slate-100">
-                <td class="px-3 py-2 font-bold text-slate-700">${escapeHtml(u.pais || '—')}</td>
-                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(u.nombre)}</td>
-                <td class="px-3 py-2 text-slate-500">${escapeHtml(u.usuario)}${u.correo ? '' : ' · sin correo'}</td>
-                <td class="px-3 py-2 text-slate-700">${n}</td>
-                <td class="px-3 py-2 text-right">
-                  <a href="/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(u.id)}" data-nav class="text-xs font-bold text-red-600 hover:underline">Cartera</a>
-                </td>
-              </tr>`;
-                    })
-                    .join('')
-                : '<tr><td colspan="5" class="px-3 py-4 text-slate-400">Sin ejecutivos. Importe el Excel.</td></tr>'
-            }
-          </tbody>
-        </table>
+      <p class="mb-3 text-xs font-semibold text-slate-500">${ejecutivos.length} ejecutivo${ejecutivos.length === 1 ? '' : 's'}</p>
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        ${
+          ejecutivos.length
+            ? ejecutivos
+                .map((u) => {
+                  const n = u._clientes;
+                  return `
+          <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(u.nombre)}</div>
+                <div class="mt-0.5 text-xs font-semibold text-slate-500 break-all">Usuario: ${escapeHtml(u.usuario)}</div>
+              </div>
+              <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">${escapeHtml(u.pais || '—')}</span>
+            </div>
+            <dl class="mt-3 space-y-1.5 text-xs text-slate-600">
+              <div class="min-w-0">
+                <span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Correo</span>
+                <div class="break-all">${escapeHtml(u.correo || 'Sin correo')}</div>
+              </div>
+              <div>
+                <span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Clientes en cartera</span>
+                <div class="text-sm font-black text-slate-900">${n}</div>
+              </div>
+            </dl>
+            <div class="mt-auto border-t border-slate-100 pt-3">
+              <a href="/admin/base-datos?view=clientes&vendedor=${encodeURIComponent(u.id)}" data-nav class="text-xs font-bold text-red-600 hover:underline">Ver cartera</a>
+            </div>
+          </article>`;
+                })
+                .join('')
+            : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">Sin ejecutivos. Importe el Excel.</p>'
+        }
       </div>
     </section>`
         : ''
@@ -2415,7 +2451,7 @@ function renderAdminBaseDatos() {
     ${
       view === 'clientes'
         ? `
-    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end">
         <div class="flex-1">
           <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">Ejecutivo</label>
@@ -2426,7 +2462,7 @@ function renderAdminBaseDatos() {
         </div>
         <div>
           <label class="mb-1 block text-[11px] font-bold uppercase text-slate-400">País</label>
-          <select id="filter-pais" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <select id="filter-pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
             <option value="">Todos</option>
             <option value="SV" ${filterPais === 'SV' ? 'selected' : ''}>SV</option>
             <option value="GT" ${filterPais === 'GT' ? 'selected' : ''}>GT</option>
@@ -2434,44 +2470,35 @@ function renderAdminBaseDatos() {
         </div>
         <button id="btn-new-client" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-700 hover:border-red-200 hover:text-red-600">+ Cliente</button>
       </div>
-      <p class="mb-2 text-xs text-slate-500">${clients.length} cliente${clients.length === 1 ? '' : 's'}</p>
-      <div class="max-h-[28rem] overflow-y-auto rounded-xl border border-slate-100">
-        <table class="min-w-full text-left text-sm">
-          <thead class="sticky top-0 bg-slate-50 text-xs uppercase tracking-wider text-slate-400">
-            <tr>
-              <th class="px-3 py-2">País</th>
-              <th class="px-3 py-2">Código</th>
-              <th class="px-3 py-2">Cliente</th>
-              <th class="px-3 py-2">Contacto</th>
-              <th class="px-3 py-2">Tel</th>
-              <th class="px-3 py-2">Ejecutivo</th>
-              <th class="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              clients.length
-                ? clients
-                    .map(
-                      (c) => `
-              <tr class="border-t border-slate-100">
-                <td class="px-3 py-2">${escapeHtml(c.pais || '—')}</td>
-                <td class="px-3 py-2 text-slate-500">${escapeHtml(c.codigo || '—')}</td>
-                <td class="px-3 py-2 font-semibold text-slate-900">${escapeHtml(c.nombre)}</td>
-                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.contacto || '—')}</td>
-                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.telefono || '—')}</td>
-                <td class="px-3 py-2 text-slate-600">${escapeHtml(c.vendedorNombre || '—')}</td>
-                <td class="px-3 py-2 text-right whitespace-nowrap">
-                  <button data-edit-client="${c.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
-                  <button data-del-client="${c.id}" class="ml-2 text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
-                </td>
-              </tr>`
-                    )
-                    .join('')
-                : '<tr><td colspan="7" class="px-3 py-4 text-slate-400">Sin clientes.</td></tr>'
-            }
-          </tbody>
-        </table>
+      <p class="mb-3 text-xs font-semibold text-slate-500">${clients.length} cliente${clients.length === 1 ? '' : 's'}</p>
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        ${
+          clients.length
+            ? clients
+                .map(
+                  (c) => `
+          <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(c.nombre)}</div>
+                <div class="mt-0.5 text-xs text-slate-500">Código: ${escapeHtml(c.codigo || '—')}</div>
+              </div>
+              <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">${escapeHtml(c.pais || '—')}</span>
+            </div>
+            <dl class="mt-3 space-y-1.5 text-xs text-slate-600">
+              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Contacto</span><div class="break-words">${escapeHtml(c.contacto || '—')}</div></div>
+              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Teléfono</span><div>${escapeHtml(c.telefono || '—')}</div></div>
+              <div><span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Ejecutivo</span><div class="break-words">${escapeHtml(c.vendedorNombre || 'Sin asignar')}</div></div>
+            </dl>
+            <div class="mt-auto flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-3">
+              <button data-edit-client="${c.id}" class="text-xs font-bold text-red-600 hover:underline">Editar</button>
+              <button data-del-client="${c.id}" class="text-xs font-bold text-slate-400 hover:text-red-600">Eliminar</button>
+            </div>
+          </article>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">Sin clientes.</p>'
+        }
       </div>
     </section>
 
