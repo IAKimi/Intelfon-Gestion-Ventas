@@ -1302,6 +1302,13 @@ function dashboardDayKey(value) {
   return d.toISOString().slice(0, 10);
 }
 
+function dashIsoDay(offsetDays = 0) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
 function renderDashboard() {
   const user = getState().session;
   const isAdmin = user.rol === 'admin';
@@ -1311,6 +1318,7 @@ function renderDashboard() {
   const ejecutivoSel = params.get('ejecutivo') || '';
   const desde = params.get('desde') || '';
   const hasta = params.get('hasta') || '';
+  const basePath = isAdmin ? '/admin/dashboard' : '/dashboard';
 
   let ejecutivos = isAdmin ? getEjecutivos() : getTeamVendedores(user);
   if (paisSel) ejecutivos = ejecutivos.filter((u) => u.pais === paisSel);
@@ -1339,6 +1347,10 @@ function renderDashboard() {
   const cierrePct = salidasAll.length
     ? Math.round((visitadas.length / salidasAll.length) * 100)
     : 0;
+  const fotoPct = visitadas.length ? Math.round((visitadas.filter((s) => s.tiene_evidencia).length / visitadas.length) * 100) : 0;
+  const tardioPct = visitadas.length
+    ? Math.round((visitadas.filter((s) => s.reporte_tardio).length / visitadas.length) * 100)
+    : 0;
 
   const clientsScope = (state.clients || []).filter(
     (c) => c.activo !== false && teamIds.has(c.vendedorId)
@@ -1351,21 +1363,39 @@ function renderDashboard() {
   );
   const conFoto = visitadas.filter((s) => s.tiene_evidencia).length;
   const tardias = visitadas.filter((s) => s.reporte_tardio).length;
+  const visitasPorEjec =
+    ejecutivos.length && visitadas.length
+      ? Math.round((visitadas.length / ejecutivos.length) * 10) / 10
+      : 0;
+  const clientesPorEjec =
+    ejecutivos.length && clientes ? Math.round((clientes / ejecutivos.length) * 10) / 10 : 0;
 
   const byDayMap = new Map();
   for (const s of salidasAll) {
     const day = dashboardDayKey(s.fecha_registro_salida || s.createdAt) || 'sin-fecha';
-    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0 });
+    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0, km: 0 });
     byDayMap.get(day).salidas += 1;
   }
   for (const s of visitadas) {
     const day = dashboardDayKey(s.fecha_reporte_real || s.visitedAt || s.fecha_registro_salida) || 'sin-fecha';
-    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0 });
-    byDayMap.get(day).visitas += 1;
+    if (!byDayMap.has(day)) byDayMap.set(day, { salidas: 0, visitas: 0, km: 0 });
+    const row = byDayMap.get(day);
+    row.visitas += 1;
+    row.km += Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0;
   }
   const dayLabels = [...byDayMap.keys()].filter((d) => d !== 'sin-fecha').sort();
   const daySalidas = dayLabels.map((d) => byDayMap.get(d).salidas);
   const dayVisitas = dayLabels.map((d) => byDayMap.get(d).visitas);
+  const dayKm = dayLabels.map((d) => Math.round(byDayMap.get(d).km * 100) / 100);
+
+  const weekdayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const weekdayCounts = [0, 0, 0, 0, 0, 0, 0];
+  for (const s of visitadas) {
+    const day = dashboardDayKey(s.fecha_reporte_real || s.visitedAt || s.fecha_registro_salida);
+    if (!day) continue;
+    const wd = new Date(`${day}T12:00:00`).getDay();
+    if (wd >= 0 && wd <= 6) weekdayCounts[wd] += 1;
+  }
 
   const rows = ejecutivos
     .map((u) => {
@@ -1375,16 +1405,20 @@ function renderDashboard() {
         (sum, s) => sum + (Number.isFinite(Number(s.distancia_km)) ? Number(s.distancia_km) : 0),
         0
       );
+      const fotos = vis.filter((s) => s.tiene_evidencia).length;
       return {
         id: u.id,
         nombre: u.nombre,
         pais: u.pais || '',
         clientes: getClientsByVendedor(u.id).filter((c) => c.tipo !== 'prospecto').length,
+        prospectos: getClientsByVendedor(u.id).filter((c) => c.tipo === 'prospecto').length,
         salidas: salidas.length,
         visitadas: vis.length,
         pendientes: salidas.length - vis.length,
         km: Math.round(km * 100) / 100,
+        fotos,
         citas: getCitasForUser(u.id).filter((c) => c.estado === 'programada').length,
+        cierre: salidas.length ? Math.round((vis.length / salidas.length) * 100) : 0,
       };
     })
     .sort((a, b) => b.visitadas - a.visitadas || b.salidas - a.salidas);
@@ -1403,19 +1437,37 @@ function renderDashboard() {
     else paisMap.OTRO += r.visitadas;
   }
 
-  const topEjec = rows.slice(0, 8);
+  const topEjec = rows.slice(0, 10);
+  const topKm = [...rows].sort((a, b) => b.km - a.km).slice(0, 8);
+
+  const buildQuery = (extra = {}) => {
+    const q = new URLSearchParams();
+    const merged = { pais: paisSel, ejecutivo: ejecutivoSel, desde, hasta, ...extra };
+    for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
+      const v = String(merged[key] || '').trim();
+      if (v) q.set(key, v);
+    }
+    const qs = q.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  };
+
+  const presetActive = (d, h) => desde === d && hasta === h;
+  const hoy = dashIsoDay(0);
+  const d7 = dashIsoDay(-6);
+  const d30 = dashIsoDay(-29);
+
   const kpi = (title, value, help) => `
-    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div class="text-xs font-semibold text-slate-500">${title}</div>
-      <div class="mt-1 text-2xl font-black text-slate-900">${value}</div>
-      <p class="mt-1 text-[11px] leading-snug text-slate-400">${help}</p>
+    <div class="min-w-[9.5rem] flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">${title}</div>
+      <div class="mt-1 text-2xl font-black tabular-nums text-slate-900">${value}</div>
+      <p class="mt-1 text-[11px] leading-snug text-slate-500">${help}</p>
     </div>`;
 
-  const chartCard = (title, help, canvasId) => `
-    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h3 class="text-sm font-black text-slate-900">${title}</h3>
-      <p class="mt-1 text-xs text-slate-500">${help}</p>
-      <div class="mt-3 h-56"><canvas id="${canvasId}"></canvas></div>
+  const chartCard = (title, help, canvasId, tall = false) => `
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <h3 class="text-base font-black text-slate-900">${title}</h3>
+      <p class="mt-1 text-xs leading-relaxed text-slate-500">${help}</p>
+      <div class="mt-4 ${tall ? 'h-72' : 'h-56'}"><canvas id="${canvasId}"></canvas></div>
     </section>`;
 
   const allEjecOptions = (isAdmin ? getEjecutivos() : getTeamVendedores(user))
@@ -1426,12 +1478,26 @@ function renderDashboard() {
     )
     .join('');
 
+  const emptyHint =
+    !salidasAll.length
+      ? `<div class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Todavía no hay salidas ni visitas en este filtro. Cuando los vendedores registren salidas y cierren visitas con foto, aquí se llenan los números y las gráficas.
+        </div>`
+      : '';
+
   app.innerHTML = shell(
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900">¿Cómo va el trabajo de campo?</h2>
-      <p class="mt-1 text-sm text-slate-500">Números claros de salidas, visitas, kilómetros y cartera. Use los filtros para acotar.</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">¿Cómo va el trabajo de campo?</h2>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">Resumen simple: cuántas salidas hubo, cuántas visitas se cerraron, cuántos kilómetros se recorrieron y cómo está cada ejecutivo. Filtre por país, persona o fechas.</p>
+    </div>
+
+    <div class="mb-3 flex flex-wrap gap-2">
+      <button data-nav="${buildQuery({ desde: hoy, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
+      <button data-nav="${buildQuery({ desde: d7, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d7, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 7 días</button>
+      <button data-nav="${buildQuery({ desde: d30, hasta: hoy })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(d30, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Últimos 30 días</button>
+      <button data-nav="${buildQuery({ desde: '', hasta: '' })}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
     </div>
 
     <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
@@ -1464,104 +1530,100 @@ function renderDashboard() {
       </div>
     </form>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      ${kpi('Salidas registradas', salidasAll.length, 'Cuántas veces un vendedor dijo “voy a salir” en el periodo.')}
-      ${kpi('Visitas cerradas', visitadas.length, 'Salidas que ya tienen reporte con foto y GPS de llegada.')}
-      ${kpi('Aún pendientes', pendientes.length, 'Salidas abiertas: salieron pero todavía no reportaron la visita.')}
-      ${kpi('% de cierre', `${cierrePct}%`, 'De cada 100 salidas, cuántas ya fueron reportadas.')}
-      ${kpi('Kilómetros recorridos', Math.round(kmTotal * 100) / 100, 'Suma de distancias GPS (oficina/salida → punto de visita).')}
-      ${kpi('Km promedio por visita', kmAvg, 'Promedio de kilómetros de cada visita ya cerrada.')}
-      ${kpi('Clientes en cartera', clientes, 'Clientes cargados de los ejecutivos filtrados.')}
-      ${kpi('Prospectos', prospectos, 'Prospectos creados (aún no son cliente formal).')}
-      ${kpi('Citas programadas', citasProg, 'Visitas agendadas por el jefe que todavía no se registran.')}
-      ${kpi('Reportes con foto', conFoto, 'Visitas cerradas que sí adjuntaron evidencia.')}
-      ${kpi('Reportes tardíos', tardias, 'Visitas reportadas fuera del día esperado.')}
-      ${kpi('Ejecutivos en vista', ejecutivos.length, 'Vendedores incluidos con el filtro actual.')}
+    ${emptyHint}
+
+    <div class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Totales del periodo</div>
+    <div class="flex gap-3 overflow-x-auto pb-2">
+      ${kpi('Salidas', salidasAll.length, 'Veces que un vendedor registró “voy a salir”.')}
+      ${kpi('Visitas hechas', visitadas.length, 'Salidas ya cerradas con reporte.')}
+      ${kpi('Pendientes', pendientes.length, 'Salieron y aún no reportaron.')}
+      ${kpi('% cerrado', `${cierrePct}%`, 'De cada 100 salidas, cuántas ya se reportaron.')}
+      ${kpi('Km totales', Math.round(kmTotal * 100) / 100, 'Suma de kilómetros GPS de las visitas.')}
+      ${kpi('Km promedio', kmAvg, 'Kilómetros típicos por visita cerrada.')}
+      ${kpi('Con foto', conFoto, 'Visitas que sí llevaron evidencia.')}
+    </div>
+
+    <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      ${kpi('Clientes en cartera', clientes, 'Clientes activos de los ejecutivos filtrados.')}
+      ${kpi('Prospectos', prospectos, 'Posibles clientes todavía no formales.')}
+      ${kpi('Citas agendadas', citasProg, 'Visitas programadas por el jefe, aún sin registrar.')}
+      ${kpi('% con foto', `${fotoPct}%`, 'De las visitas cerradas, cuántas llevan foto.')}
+      ${kpi('Reportes tardíos', tardias, 'Visitas reportadas después del día esperado.')}
+      ${kpi('% tardíos', `${tardioPct}%`, 'Qué porcentaje de visitas se reportó tarde.')}
+      ${kpi('Visitas / ejecutivo', visitasPorEjec, 'Promedio de visitas cerradas por vendedor.')}
+      ${kpi('Clientes / ejecutivo', clientesPorEjec, 'Promedio de clientes en cartera por vendedor.')}
     </div>
 
     <div class="mt-5 grid gap-4 lg:grid-cols-2">
       ${chartCard(
         '¿Cuántas salidas y visitas hubo por día?',
-        'Línea de actividad diaria: cuántas salidas se registraron y cuántas visitas se cerraron.',
-        'chart-actividad'
+        'Cada punto es un día. Rojo = salidas registradas. Verde = visitas ya cerradas.',
+        'chart-actividad',
+        true
+      )}
+      ${chartCard(
+        '¿Cuántos kilómetros se recorrieron por día?',
+        'Suma de kilómetros GPS del día (solo visitas ya cerradas).',
+        'chart-km-dia'
       )}
       ${chartCard(
         '¿Quién cerró más visitas?',
-        'Comparación por ejecutivo: salidas abiertas vs visitas ya reportadas.',
-        'chart-ejecutivos'
+        'Barras por ejecutivo: salidas abiertas vs visitas ya reportadas.',
+        'chart-ejecutivos',
+        true
+      )}
+      ${chartCard(
+        '¿Quién recorrió más kilómetros?',
+        'Comparación de kilómetros GPS por ejecutivo en el periodo.',
+        'chart-km-ejec'
       )}
       ${chartCard(
         '¿Por qué motivo visitan?',
-        'Tipos de visita más usados en los reportes cerrados.',
+        'Tipos de visita más usados cuando cierran el reporte.',
         'chart-tipos'
       )}
       ${chartCard(
+        '¿Qué día de la semana visitan más?',
+        'Cuántas visitas cerradas caen en cada día (domingo a sábado).',
+        'chart-semana'
+      )}
+      ${chartCard(
         '¿En qué país hay más visitas cerradas?',
-        'Visitas reportadas agrupadas por país del ejecutivo.',
+        'Visitas reportadas según el país del ejecutivo.',
         'chart-paises'
+      )}
+      ${chartCard(
+        '¿Cómo está la cartera?',
+        'Clientes formales vs prospectos de los ejecutivos filtrados.',
+        'chart-cartera'
       )}
     </div>
 
-    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h3 class="text-sm font-black text-slate-900">Detalle por ejecutivo</h3>
+    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <h3 class="text-base font-black text-slate-900">Detalle por ejecutivo</h3>
       <p class="mt-1 text-xs text-slate-500">Lista ordenada por visitas cerradas. Sirve para ver quién está al día y quién tiene pendientes.</p>
-      <div class="mt-3 space-y-3 lg:hidden">
+      <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         ${
           rows.length
             ? rows
                 .map(
                   (r) => `
           <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
-            <div class="font-black text-slate-900">${escapeHtml(r.nombre)}</div>
-            <p class="text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes</p>
-            <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
+            <div class="font-black text-slate-900 break-words">${escapeHtml(r.nombre)}</div>
+            <p class="text-xs text-slate-500">${escapeHtml(r.pais || '—')} · ${r.clientes} clientes · ${r.prospectos} prospectos</p>
+            <div class="mt-2 grid grid-cols-3 gap-2 text-xs">
               <div>Salidas <strong class="block text-sm">${r.salidas}</strong></div>
               <div>Visitas <strong class="block text-sm text-emerald-700">${r.visitadas}</strong></div>
-              <div>Pendientes <strong class="block text-sm ${r.pendientes ? 'text-amber-700' : ''}">${r.pendientes}</strong></div>
+              <div>Pend. <strong class="block text-sm ${r.pendientes ? 'text-amber-700' : ''}">${r.pendientes}</strong></div>
               <div>Km <strong class="block text-sm">${r.km}</strong></div>
+              <div>Fotos <strong class="block text-sm">${r.fotos}</strong></div>
+              <div>% cierre <strong class="block text-sm">${r.cierre}%</strong></div>
             </div>
           </div>`
                 )
                 .join('')
-            : '<p class="text-sm text-slate-400">No hay ejecutivos con estos filtros.</p>'
+            : '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">No hay ejecutivos con estos filtros.</p>'
         }
-      </div>
-      <div class="mt-3 hidden overflow-x-auto lg:block">
-        <table class="w-full min-w-[720px] text-left text-sm">
-          <thead>
-            <tr class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
-              <th class="px-3 py-2 font-bold">Ejecutivo</th>
-              <th class="px-3 py-2 font-bold">País</th>
-              <th class="px-3 py-2 font-bold">Clientes</th>
-              <th class="px-3 py-2 font-bold">Salidas</th>
-              <th class="px-3 py-2 font-bold">Visitas</th>
-              <th class="px-3 py-2 font-bold">Pendientes</th>
-              <th class="px-3 py-2 font-bold">Km</th>
-              <th class="px-3 py-2 font-bold">Citas</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              rows.length
-                ? rows
-                    .map(
-                      (r) => `
-              <tr class="border-b border-slate-50">
-                <td class="px-3 py-2.5 font-semibold text-slate-900">${escapeHtml(r.nombre)}</td>
-                <td class="px-3 py-2.5 text-slate-600">${escapeHtml(r.pais || '—')}</td>
-                <td class="px-3 py-2.5 text-slate-600">${r.clientes}</td>
-                <td class="px-3 py-2.5 text-slate-600">${r.salidas}</td>
-                <td class="px-3 py-2.5 font-semibold text-emerald-700">${r.visitadas}</td>
-                <td class="px-3 py-2.5 ${r.pendientes ? 'font-semibold text-amber-700' : 'text-slate-600'}">${r.pendientes}</td>
-                <td class="px-3 py-2.5 text-slate-600">${r.km}</td>
-                <td class="px-3 py-2.5 text-slate-600">${r.citas}</td>
-              </tr>`
-                    )
-                    .join('')
-                : '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-400">No hay ejecutivos con estos filtros.</td></tr>'
-            }
-          </tbody>
-        </table>
       </div>
     </section>
     `,
@@ -1579,16 +1641,15 @@ function renderDashboard() {
       const v = String(fd.get(key) || '').trim();
       if (v) q.set(key, v);
     }
-    const base = isAdmin ? '/admin/dashboard' : '/dashboard';
-    go(q.toString() ? `${base}?${q}` : base, { replace: true, animate: false });
+    go(q.toString() ? `${basePath}?${q}` : basePath, { replace: true, animate: false });
   });
   document.getElementById('dash-clear')?.addEventListener('click', () => {
-    go(isAdmin ? '/admin/dashboard' : '/dashboard', { replace: true, animate: false });
+    go(basePath, { replace: true, animate: false });
   });
 
   const ChartLib = window.Chart;
   if (!ChartLib) return;
-  const grid = { color: 'rgba(148,163,184,0.25)' };
+  const grid = { color: 'rgba(148,163,184,0.2)' };
   const common = {
     responsive: true,
     maintainAspectRatio: false,
@@ -1608,7 +1669,7 @@ function renderDashboard() {
             borderColor: '#dc2626',
             backgroundColor: 'rgba(220,38,38,0.12)',
             fill: true,
-            tension: 0.3,
+            tension: 0.35,
           },
           {
             label: 'Visitas cerradas',
@@ -1616,7 +1677,28 @@ function renderDashboard() {
             borderColor: '#059669',
             backgroundColor: 'rgba(5,150,105,0.12)',
             fill: true,
-            tension: 0.3,
+            tension: 0.35,
+          },
+        ],
+      },
+      options: { ...common, scales: { x: { grid }, y: { beginAtZero: true, grid } } },
+    });
+  }
+
+  const elKmDia = document.getElementById('chart-km-dia');
+  if (elKmDia) {
+    new ChartLib(elKmDia, {
+      type: 'line',
+      data: {
+        labels: dayLabels.length ? dayLabels.map((d) => d.slice(5)) : ['Sin datos'],
+        datasets: [
+          {
+            label: 'Km',
+            data: dayLabels.length ? dayKm : [0],
+            borderColor: '#0f172a',
+            backgroundColor: 'rgba(15,23,42,0.1)',
+            fill: true,
+            tension: 0.35,
           },
         ],
       },
@@ -1647,12 +1729,34 @@ function renderDashboard() {
     });
   }
 
+  const elKmEj = document.getElementById('chart-km-ejec');
+  if (elKmEj) {
+    new ChartLib(elKmEj, {
+      type: 'bar',
+      data: {
+        labels: topKm.length ? topKm.map((r) => r.nombre.split(' ')[0]) : ['Sin datos'],
+        datasets: [
+          {
+            label: 'Km',
+            data: topKm.length ? topKm.map((r) => r.km) : [0],
+            backgroundColor: '#1e293b',
+          },
+        ],
+      },
+      options: {
+        ...common,
+        indexAxis: 'y',
+        scales: { x: { beginAtZero: true, grid }, y: { grid } },
+      },
+    });
+  }
+
   const elTipos = document.getElementById('chart-tipos');
   if (elTipos) {
     new ChartLib(elTipos, {
       type: 'doughnut',
       data: {
-        labels: tipoLabels.length ? tipoLabels : ['Sin visitas'],
+        labels: tipoLabels.length ? tipoLabels : ['Sin visitas aún'],
         datasets: [
           {
             data: tipoValues.length ? tipoValues : [1],
@@ -1661,6 +1765,24 @@ function renderDashboard() {
         ],
       },
       options: { ...common },
+    });
+  }
+
+  const elSem = document.getElementById('chart-semana');
+  if (elSem) {
+    new ChartLib(elSem, {
+      type: 'bar',
+      data: {
+        labels: weekdayNames,
+        datasets: [
+          {
+            label: 'Visitas',
+            data: weekdayCounts,
+            backgroundColor: '#f97316',
+          },
+        ],
+      },
+      options: { ...common, scales: { x: { grid }, y: { beginAtZero: true, grid } } },
     });
   }
 
@@ -1683,6 +1805,23 @@ function renderDashboard() {
         indexAxis: 'y',
         scales: { x: { beginAtZero: true, grid }, y: { grid } },
       },
+    });
+  }
+
+  const elCartera = document.getElementById('chart-cartera');
+  if (elCartera) {
+    new ChartLib(elCartera, {
+      type: 'doughnut',
+      data: {
+        labels: ['Clientes', 'Prospectos'],
+        datasets: [
+          {
+            data: [clientes || 0, prospectos || 0],
+            backgroundColor: ['#0ea5e9', '#f59e0b'],
+          },
+        ],
+      },
+      options: { ...common },
     });
   }
 }
@@ -2800,48 +2939,33 @@ function renderAdminUsuarios() {
   const usersCards = visibleUsers
     .map(
       (u) => `
-      <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <article class="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div class="flex items-start justify-between gap-3">
-          <div>
-            <div class="text-sm font-black text-slate-900">${escapeHtml(u.nombre)}</div>
-            <div class="mt-0.5 text-xs font-semibold text-slate-500">${escapeHtml(u.usuario)}</div>
+          <div class="min-w-0">
+            <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(u.nombre)}</div>
+            <div class="mt-0.5 text-xs font-semibold text-slate-500 break-all">Usuario: ${escapeHtml(u.usuario)}</div>
           </div>
-          <span class="rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
+          <span class="shrink-0 rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
         </div>
-        <dl class="mt-3 space-y-1.5 text-xs text-slate-600">
-          <div><span class="font-bold text-slate-400">Correo</span><div>${escapeHtml(u.correo || '—')}</div></div>
-          <div><span class="font-bold text-slate-400">Jefe</span><div>${escapeHtml(u.correo_jefe || '—')}</div></div>
-          <div class="flex items-center justify-between gap-3 pt-1">
+        <dl class="mt-3 space-y-2 text-xs text-slate-600">
+          <div class="min-w-0">
+            <span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Correo</span>
+            <div class="break-all">${escapeHtml(u.correo || '—')}</div>
+          </div>
+          <div class="min-w-0">
+            <span class="font-bold uppercase tracking-wider text-[10px] text-slate-400">Correo del jefe</span>
+            <div class="break-all">${escapeHtml(u.correo_jefe || '—')}</div>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
             <span class="capitalize font-semibold text-slate-800">${escapeHtml(u.rol)}</span>
             <span class="inline-flex items-center gap-2 text-[11px] font-bold text-slate-500">Combustible ${iosSwitch('combustible_row', u.combustible_activo, {
               dataAttr: `data-toggle-fuel="${u.id}"`,
             })}</span>
           </div>
-          <div class="text-[11px] text-slate-500">Pago: ${escapeHtml(u.pago_combustible_default || '—')}</div>
+          <div class="text-[11px] text-slate-500">Forma de pago combustible: ${escapeHtml(u.pago_combustible_default || '—')}</div>
         </dl>
-        <div class="mt-3 border-t border-slate-100 pt-3">${userActions(u)}</div>
+        <div class="mt-auto border-t border-slate-100 pt-3">${userActions(u)}</div>
       </article>`
-    )
-    .join('');
-
-  const usersRows = visibleUsers
-    .map(
-      (u) => `
-      <tr class="border-t border-slate-100 align-top hover:bg-slate-50/80">
-        <td class="px-3 py-2.5">
-          <div class="text-sm font-black text-slate-900 break-words">${escapeHtml(u.nombre)}</div>
-          <div class="mt-0.5 text-xs text-slate-500 break-all">${escapeHtml(u.usuario)}</div>
-          <span class="mt-1 inline-flex rounded-full ${u.activo !== false ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} px-2 py-0.5 text-[10px] font-bold">${u.activo !== false ? 'Activo' : 'Inactivo'}</span>
-        </td>
-        <td class="px-3 py-2.5 text-sm text-slate-600 break-all">${escapeHtml(u.correo || '—')}</td>
-        <td class="px-3 py-2.5 text-sm text-slate-600 break-all">${escapeHtml(u.correo_jefe || '—')}</td>
-        <td class="px-3 py-2.5 text-sm capitalize text-slate-700 whitespace-nowrap">${escapeHtml(u.rol)}</td>
-        <td class="px-3 py-2.5 text-xs text-slate-600 break-words">${escapeHtml(u.pago_combustible_default || '—')}</td>
-        <td class="px-3 py-2.5">${iosSwitch('combustible_row', u.combustible_activo, {
-          dataAttr: `data-toggle-fuel="${u.id}"`,
-        })}</td>
-        <td class="px-3 py-2.5 min-w-[9rem]">${userActions(u)}</td>
-      </tr>`
     )
     .join('');
 
@@ -2872,24 +2996,8 @@ function renderAdminUsuarios() {
           }
           <span class="ml-auto text-xs font-semibold text-slate-500">${paisLabel} · ${visibleUsers.length}</span>
         </div>
-        <div class="grid gap-3 lg:hidden">
-          ${usersCards || '<p class="text-sm text-slate-400">Sin usuarios en este país.</p>'}
-        </div>
-        <div class="hidden overflow-x-auto lg:block">
-          <table class="w-full min-w-[860px] text-left">
-            <thead class="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
-              <tr>
-                <th class="px-3 py-2 font-bold">Persona</th>
-                <th class="px-3 py-2 font-bold">Correo</th>
-                <th class="px-3 py-2 font-bold">Correo jefe</th>
-                <th class="px-3 py-2 font-bold">Rol</th>
-                <th class="px-3 py-2 font-bold">Pago</th>
-                <th class="px-3 py-2 font-bold">Comb.</th>
-                <th class="px-3 py-2 font-bold">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>${usersRows || '<tr><td colspan="7" class="px-3 py-4 text-sm text-slate-400">Sin usuarios en este país.</td></tr>'}</tbody>
-          </table>
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          ${usersCards || '<p class="text-sm text-slate-400 sm:col-span-2 xl:col-span-3">Sin usuarios en este país.</p>'}
         </div>
       </section>
 
