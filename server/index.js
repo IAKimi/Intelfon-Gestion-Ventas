@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -11,6 +12,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
+const APP_PUBLIC_URL = String(process.env.APP_PUBLIC_URL || '').replace(/\/+$/, '');
+const SMTP_HOST = String(process.env.SMTP_HOST || '').trim();
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = String(process.env.SMTP_USER || '').trim();
+const SMTP_PASS = String(process.env.SMTP_PASS || '').trim();
+const SMTP_FROM = String(process.env.SMTP_FROM || SMTP_USER || '').trim();
+const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true';
 
 const DEFAULT_WEBHOOK_URL =
   process.env.WEBHOOK_URL ||
@@ -584,6 +592,62 @@ const FORMULARIOS = new Set([
   'solicitud_cliente',
 ]);
 
+async function sendSolicitudClienteEmail(body) {
+  const to = String(body.correo_jefe || '').trim();
+  if (!to) return { sent: false, reason: 'sin_correo_jefe' };
+  if (!SMTP_HOST || !SMTP_FROM) return { sent: false, reason: 'smtp_no_configurado' };
+
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+  });
+
+  const panelUrl = APP_PUBLIC_URL ? `${APP_PUBLIC_URL}/solicitudes` : '';
+  const rows = [
+    ['Cliente', body.nombre_cliente],
+    ['Código', body.codigo_cliente],
+    ['Contacto', body.contacto_cliente],
+    ['Cargo', body.cargo_contacto],
+    ['Teléfono', body.telefono_cliente],
+    ['Tel. fijo', body.telefono_fijo],
+    ['Correo', body.correo_contacto],
+    ['Ubicación', body.ubicacion_cliente],
+    ['Vendedor', body.vendedor],
+    ['País', body.pais],
+    ['Notas', body.notas_solicitud],
+  ]
+    .filter(([, v]) => String(v || '').trim())
+    .map(
+      ([k, v]) =>
+        `<tr><td style="padding:6px 10px;color:#64748b;font-size:12px;text-transform:uppercase;">${k}</td><td style="padding:6px 10px;color:#0f172a;font-size:14px;">${String(v)}</td></tr>`
+    )
+    .join('');
+
+  const html = `
+    <div style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#0f172a;">
+      <h2 style="margin:0 0 8px;font-size:20px;">Nueva solicitud de cliente</h2>
+      <p style="margin:0 0 16px;color:#475569;font-size:14px;">
+        ${body.vendedor || 'Un vendedor'} solicita agregar un cliente a su cartera. Revise y apruebe o rechace en la plataforma.
+      </p>
+      <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">${rows}</table>
+      ${
+        panelUrl
+          ? `<p style="margin:20px 0 0;"><a href="${panelUrl}" style="display:inline-block;background:#dc2626;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700;font-size:13px;">Abrir solicitudes</a></p>`
+          : ''
+      }
+    </div>`;
+
+  await transporter.sendMail({
+    from: SMTP_FROM,
+    to,
+    subject: `Solicitud de cliente: ${body.nombre_cliente || 'Sin nombre'}`,
+    html,
+  });
+  return { sent: true };
+}
+
 /** Reenvía el payload a Make desde el servidor (URL nunca llega al navegador). */
 app.post('/api/make', requireAuth, async (req, res) => {
   try {
@@ -603,7 +667,17 @@ app.post('/api/make', requireAuth, async (req, res) => {
       body: JSON.stringify(body),
     });
     if (!upstream.ok) return res.status(502).json({ error: 'No se pudo completar la solicitud. Inténtelo nuevamente.' });
-    return res.json({ ok: true });
+
+    let email = null;
+    if (body.formulario === 'solicitud_cliente' && body.accion === 'nueva_solicitud') {
+      try {
+        email = await sendSolicitudClienteEmail(body);
+      } catch (mailErr) {
+        console.error('SMTP solicitud_cliente', mailErr);
+        email = { sent: false, reason: 'smtp_error' };
+      }
+    }
+    return res.json({ ok: true, email });
   } catch (err) {
     console.error(err);
     return res.status(502).json({ error: 'No se pudo completar la solicitud. Inténtelo nuevamente.' });

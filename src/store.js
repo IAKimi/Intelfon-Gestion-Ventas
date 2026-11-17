@@ -868,6 +868,49 @@ export function removeClientContact(clientId, contactId, user) {
   return getState();
 }
 
+/** Actualiza un contacto de la lista `contactos` del cliente. */
+export function updateClientContactEntry(clientId, contactId, contactData, user) {
+  const state = ensureMemory();
+  const idx = state.clients.findIndex((c) => c.id === clientId);
+  if (idx < 0 || !user) return { state: getState(), updated: false };
+  const client = state.clients[idx];
+  if (user.rol !== 'admin' && client.vendedorId !== user.id) {
+    return { state: getState(), updated: false };
+  }
+  if (!Array.isArray(client.contactos)) client.contactos = [];
+  const cIdx = client.contactos.findIndex((x) => x.id === contactId);
+  if (cIdx < 0) return { state: getState(), updated: false };
+  const prev = client.contactos[cIdx];
+  const next = normalizeContactEntry({ ...prev, ...contactData, id: contactId });
+  if (!next) return { state: getState(), updated: false };
+  client.contactos[cIdx] = next;
+  if (String(client.contacto || '').toLowerCase() === String(prev.nombre || '').toLowerCase()) {
+    client.contacto = next.nombre;
+    client.telefono = next.telefono || client.telefono;
+    client.telefono_fijo = next.telefono_fijo || client.telefono_fijo;
+    client.correo_contacto = next.correo || client.correo_contacto;
+    client.contacto_rol = next.cargo || client.contacto_rol;
+  }
+  if (!Array.isArray(state.contactChanges)) state.contactChanges = [];
+  state.contactChanges.push({
+    id: createId('chg'),
+    clientId: client.id,
+    codigo: client.codigo || '',
+    clienteNombre: client.nombre || '',
+    pais: client.pais || '',
+    campo: 'contacto_editado',
+    campoLabel: 'Contacto editado',
+    anterior: prev.nombre || '',
+    nuevo: next.nombre || '',
+    vendedorId: client.vendedorId || user.id,
+    vendedorNombre: client.vendedorNombre || user.nombre || '',
+    correo_jefe: state.users.find((u) => u.id === client.vendedorId)?.correo_jefe || '',
+    createdAt: new Date().toISOString(),
+  });
+  save(state);
+  return { state: getState(), updated: true, contact: next };
+}
+
 /** Edita contacto de un cliente propio y deja trazabilidad (anterior → nuevo). */
 export function updateClientContact(clientId, fields, user) {
   const state = ensureMemory();
@@ -914,23 +957,48 @@ export function deleteClient(id) {
   return getState();
 }
 
-export function createClientRequest({ nombre, contacto, telefono, notas, prospectId = '' }, seller) {
+export function createClientRequest(data, seller) {
   const state = ensureMemory();
   const req = {
     id: createId('req'),
-    nombre: String(nombre || '').trim(),
-    contacto: String(contacto || '').trim(),
-    telefono: String(telefono || '').trim(),
-    notas: String(notas || '').trim(),
-    prospectId: prospectId || '',
+    nombre: String(data.nombre || '').trim(),
+    codigo: String(data.codigo || '').trim(),
+    contacto: String(data.contacto || '').trim(),
+    telefono: String(data.telefono || '').trim(),
+    telefono_fijo: String(data.telefono_fijo || '').trim(),
+    correo_contacto: String(data.correo_contacto || data.correo || '').trim(),
+    contacto_rol: String(data.contacto_rol || data.cargo || '').trim(),
+    ubicacion: String(data.ubicacion || '').trim(),
+    notas: String(data.notas || '').trim(),
+    prospectId: data.prospectId || '',
     vendedorId: seller.id,
     vendedorNombre: seller.nombre,
     vendedorCorreo: seller.correo || '',
+    correo_jefe: seller.correo_jefe || '',
+    pais: seller.pais || '',
     estado: 'pendiente',
     createdAt: new Date().toISOString(),
     resolvedAt: null,
   };
   state.clientRequests.unshift(req);
+  const jefeCorreo = String(seller.correo_jefe || '').trim().toLowerCase();
+  if (jefeCorreo) {
+    const jefe = state.users.find(
+      (u) => u.activo !== false && String(u.correo || '').trim().toLowerCase() === jefeCorreo
+    );
+    if (jefe) {
+      state.notifications.unshift({
+        id: createId('ntf'),
+        userId: jefe.id,
+        tipo: 'solicitud_cliente',
+        titulo: 'Nueva solicitud de cliente',
+        mensaje: `${seller.nombre} solicita agregar “${req.nombre}” a su cartera.`,
+        leida: false,
+        createdAt: new Date().toISOString(),
+        requestId: req.id,
+      });
+    }
+  }
   save(state);
   return { state: getState(), request: req };
 }
@@ -956,16 +1024,34 @@ export function resolveClientRequest(id, decision, adminNote = '') {
     );
     if (!exists) {
       const seller = state.users.find((u) => u.id === req.vendedorId);
+      const contactos = [];
+      if (req.contacto) {
+        contactos.push({
+          id: createId('ctc'),
+          nombre: req.contacto,
+          cargo: req.contacto_rol || '',
+          telefono: req.telefono || '',
+          telefono_fijo: req.telefono_fijo || '',
+          correo: req.correo_contacto || '',
+        });
+      }
       state.clients.push(
         normalizeClient({
           id: createId('cli'),
+          codigo: req.codigo || '',
           nombre: req.nombre,
           contacto: req.contacto,
           telefono: req.telefono || '',
-          pais: seller?.pais || '',
+          telefono_fijo: req.telefono_fijo || '',
+          correo_contacto: req.correo_contacto || '',
+          contacto_rol: req.contacto_rol || '',
+          ubicacion: req.ubicacion || '',
+          contactos,
+          pais: req.pais || seller?.pais || '',
           vendedorId: req.vendedorId,
           vendedorNombre: req.vendedorNombre,
           origen: 'aprobado',
+          tipo: 'cliente',
           activo: true,
           createdAt: new Date().toISOString(),
         })
@@ -1171,16 +1257,18 @@ export function createCita(data, creator) {
     createdAt: new Date().toISOString(),
   };
   state.citas.unshift(cita);
-  state.notifications.unshift({
-    id: createId('ntf'),
-    userId: cita.vendedorId,
-    tipo: 'cita_programada',
-    titulo: 'Cita programada',
-    mensaje: `${creator.nombre} le programó una visita a “${cita.clienteNombre}” el ${cita.fecha}${cita.hora ? ` a las ${cita.hora}` : ''}.`,
-    leida: false,
-    createdAt: new Date().toISOString(),
-    citaId: cita.id,
-  });
+  if (cita.vendedorId && cita.vendedorId !== creator.id) {
+    state.notifications.unshift({
+      id: createId('ntf'),
+      userId: cita.vendedorId,
+      tipo: 'cita_programada',
+      titulo: 'Cita programada',
+      mensaje: `${creator.nombre} le programó una visita a “${cita.clienteNombre}” el ${cita.fecha}${cita.hora ? ` a las ${cita.hora}` : ''}.`,
+      leida: false,
+      createdAt: new Date().toISOString(),
+      citaId: cita.id,
+    });
+  }
   save(state);
   return { state: getState(), cita };
 }

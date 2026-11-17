@@ -24,7 +24,7 @@ import {
   importClients,
   upsertClient,
   deleteClient,
-  updateClientContact,
+  updateClientContactEntry,
   addClientContact,
   removeClientContact,
   listClientContacts,
@@ -34,8 +34,6 @@ import {
   markNotificationsRead,
   isCatalogoClientesActivo,
   getClientesDe,
-  getProspectosDe,
-  createProspect,
   getTeamVendedores,
   createCita,
   getCitasForUser,
@@ -627,36 +625,11 @@ function renderHome() {
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
-      ${isJefe(user) ? actionCard('/citas', 'Programar citas', 'Agende visitas a su equipo.', 'salida') : ''}
-      ${isJefe(user) ? actionCard('/dashboard', 'Dashboard', 'Visitas y pendientes de su equipo.', 'solicitudes') : ''}
-      ${isJefe(user) ? actionCard('/historial', 'Historial de equipo', 'Cambios de contacto de su equipo.', 'solicitudes') : ''}
-      ${isJefe(user) ? actionCard('/solicitudes', 'Solicitudes del equipo', 'Aprobar o rechazar altas a cliente.', 'solicitudes') : ''}
+      ${actionCard('/citas', 'Programar citas', isJefe(user) ? 'Agende visitas a su equipo o a usted.' : 'Agende visitas a futuro. La salida se registra aparte.', 'salida')}
+      ${actionCard('/dashboard', 'Dashboard', isJefe(user) ? 'Visitas y pendientes de su equipo.' : 'Sus visitas, salidas y métricas.', 'solicitudes')}
+      ${actionCard('/solicitudes', isJefe(user) ? 'Solicitudes del equipo' : 'Mis solicitudes', isJefe(user) ? 'Aprobar o rechazar altas a cartera.' : 'Solicitar agregar un cliente a su cartera.', 'solicitudes')}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
     </div>
-    ${(() => {
-      const citas = getCitasForUser(user.id)
-        .filter((c) => c.estado === 'programada')
-        .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
-      if (!citas.length) return '';
-      return `
-      <section class="mt-5 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-        <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas programadas para usted</h3>
-        <div class="mt-3 space-y-2">
-          ${citas
-            .map(
-              (c) => `
-            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-              <div class="min-w-0">
-                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}</div>
-                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · Programada por ${escapeHtml(c.creadoPorNombre)}</p>
-              </div>
-              <button data-cita-salida="${c.id}" class="shrink-0 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">Registrar salida</button>
-            </div>`
-            )
-            .join('')}
-        </div>
-      </section>`;
-    })()}
     ${
       !isCatalogoClientesActivo()
         ? `<p class="mt-3 text-center text-[11px] text-slate-400">Modo libre: puede escribir el cliente a mano. El catálogo se activa desde Administración.</p>`
@@ -667,9 +640,6 @@ function renderHome() {
   );
   bindShell('/');
   bindGpsBanner();
-  document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
-    btn.addEventListener('click', () => go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`));
-  });
 
   const panel = document.getElementById('notes-panel');
   document.getElementById('btn-notes')?.addEventListener('click', () => {
@@ -765,17 +735,44 @@ function renderSalida() {
   const cita =
     citaRaw && citaRaw.vendedorId === user.id && citaRaw.estado === 'programada' ? citaRaw : null;
   const destinoItems = getClientesDe(user);
+  const citasPendientes = getCitasForUser(user.id)
+    .filter((c) => c.estado === 'programada')
+    .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+
+  const inboxHtml =
+    !cita && citasPendientes.length
+      ? `<section class="mb-4 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
+        <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas pendientes de registrar salida</h3>
+        <p class="mt-1 text-xs text-slate-500">Elija una cita agendada. Al continuar se capturará su GPS en este momento.</p>
+        <div class="mt-3 space-y-2">
+          ${citasPendientes
+            .map(
+              (c) => `
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div class="min-w-0">
+                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}</div>
+                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.creadoPorNombre || 'Agenda')}</p>
+              </div>
+              <button type="button" data-cita-salida="${c.id}" class="shrink-0 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">Continuar</button>
+            </div>`
+            )
+            .join('')}
+        </div>
+      </section>`
+      : '';
 
   app.innerHTML = shell(
     `
+    ${inboxHtml}
     <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
         Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>ubicación GPS</strong> (PC o teléfono) como punto A.
+        ${cita ? '' : ' También puede salir ad hoc eligiendo un cliente abajo.'}
       </div>
       ${
         cita
-          ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados.</div>`
+          ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados. <a href="/salida" data-nav="/salida" class="font-bold underline">Cancelar y volver al buzón</a></div>`
           : ''
       }
       <div class="grid gap-4 sm:grid-cols-2">
@@ -814,6 +811,9 @@ function renderSalida() {
   );
   bindShell('/');
   bindGpsBanner();
+  document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
+    btn.addEventListener('click', () => go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`));
+  });
   // El contacto solo se precarga cuando la salida nace de una cita programada.
   bindClientSelect(document.getElementById('form-salida'), { autofill: Boolean(cita) });
   bindFormSubmit('form-salida', async (data, btn) => {
@@ -1153,25 +1153,49 @@ function renderReintegro() {
 
 function renderCitas() {
   const user = getState().session;
-  const team = getTeamVendedores(user);
+  const jefe = isJefe(user);
+  const team = jefe ? getTeamVendedores(user) : [];
   const { fecha, hora } = nowParts();
   const citas = (getState().citas || [])
-    .filter((c) => c.creadoPorId === user.id || team.some((t) => t.id === c.vendedorId))
+    .filter((c) =>
+      jefe
+        ? c.creadoPorId === user.id ||
+          c.vendedorId === user.id ||
+          team.some((t) => t.id === c.vendedorId)
+        : c.vendedorId === user.id || c.creadoPorId === user.id
+    )
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+
+  const vendedorField = jefe
+    ? field('Vendedor', 'vendedorId', {
+        type: 'select',
+        value: `<option value="${user.id}">${escapeHtml(user.nombre)} (yo)</option>${team
+          .filter((t) => t.id !== user.id)
+          .map(
+            (t) =>
+              `<option value="${t.id}">${escapeHtml(t.nombre)} (${escapeHtml(t.pais || '')})</option>`
+          )
+          .join('')}`,
+      })
+    : `<input type="hidden" name="vendedorId" value="${user.id}" />
+       <div class="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-sm text-slate-600 sm:col-span-2">
+         Agenda personal. Al llegar el día, registre la salida desde <strong>Registro de salida</strong> para capturar el GPS.
+       </div>`;
 
   app.innerHTML = shell(
     `
     <form id="form-cita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p class="text-sm text-slate-500">La cita le llegará al vendedor con el contacto ya cargado.</p>
+      <p class="text-sm text-slate-500">${
+        jefe
+          ? 'La cita queda en agenda. El GPS se captura solo cuando el vendedor registra la salida.'
+          : 'Programe visitas a futuro. Programar no captura GPS: eso ocurre al registrar la salida.'
+      }</p>
       <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Vendedor', 'vendedorId', {
-          type: 'select',
-          value: `<option value="">Seleccione…</option>${team.map((t) => `<option value="${t.id}">${escapeHtml(t.nombre)} (${escapeHtml(t.pais || '')})</option>`).join('')}`,
-        })}
-        <div>
+        ${vendedorField}
+        <div class="${jefe ? '' : 'sm:col-span-2'}">
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
           <select name="clienteId" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-            <option value="">Primero elija vendedor</option>
+            <option value="">Seleccione un cliente</option>
           </select>
         </div>
         ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Se completa al elegir cliente' })}
@@ -1193,7 +1217,7 @@ function renderCitas() {
                   (c) => `
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
               <div>
-                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)} · ${escapeHtml(c.vendedorNombre)}</div>
+                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}${jefe ? ` · ${escapeHtml(c.vendedorNombre)}` : ''}</div>
                 <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.estado)}</p>
               </div>
               ${c.estado === 'programada' ? `<button data-cancel-cita="${c.id}" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Cancelar</button>` : ''}
@@ -1212,7 +1236,8 @@ function renderCitas() {
   const vendedorSel = form.querySelector('[name="vendedorId"]');
   const clienteSel = form.querySelector('[name="clienteId"]');
   const fillClientes = () => {
-    const clientes = getClientsByVendedor(vendedorSel.value).filter((c) => c.tipo !== 'prospecto');
+    const vid = vendedorSel?.value || user.id;
+    const clientes = getClientsByVendedor(vid).filter((c) => c.tipo !== 'prospecto');
     clienteSel.innerHTML =
       '<option value="">Seleccione un cliente</option>' +
       clientes
@@ -1222,7 +1247,8 @@ function renderCitas() {
         )
         .join('');
   };
-  vendedorSel.addEventListener('change', fillClientes);
+  vendedorSel?.addEventListener?.('change', fillClientes);
+  fillClientes();
   clienteSel.addEventListener('change', () => {
     const opt = clienteSel.selectedOptions[0];
     if (!opt) return;
@@ -1246,7 +1272,7 @@ function renderCitas() {
     }
     createCita(
       {
-        vendedorId: String(fd.get('vendedorId') || ''),
+        vendedorId: String(fd.get('vendedorId') || user.id),
         clienteId: opt.value,
         clienteNombre: opt.dataset.nombre || '',
         contacto: String(fd.get('contacto') || ''),
@@ -1257,7 +1283,11 @@ function renderCitas() {
       },
       user
     );
-    showToast('Cita programada. El vendedor ya la puede ver.');
+    showToast(
+      jefe && String(fd.get('vendedorId')) !== user.id
+        ? 'Cita programada. El vendedor ya la puede ver.'
+        : 'Cita programada. Recuerde registrar la salida el día de la visita.'
+    );
     render();
   });
 }
@@ -1281,16 +1311,23 @@ function dashIsoDay(offsetDays = 0) {
 function renderDashboard() {
   const user = getState().session;
   const isAdmin = user.rol === 'admin';
+  const personalDash = !isAdmin && !isJefe(user);
   const state = getState();
   const params = new URLSearchParams(location.search);
-  const tabSel = params.get('tab') === 'ejecutivos' ? 'ejecutivos' : 'global';
-  const paisSel = params.get('pais') || '';
-  const ejecutivoSel = params.get('ejecutivo') || '';
+  const tabSel =
+    personalDash || params.get('tab') !== 'ejecutivos' ? 'global' : 'ejecutivos';
+  const paisSel = personalDash ? '' : params.get('pais') || '';
+  const ejecutivoSel = personalDash ? user.id : params.get('ejecutivo') || '';
+  const clienteSel = personalDash ? params.get('cliente') || '' : '';
   const desde = params.get('desde') || '';
   const hasta = params.get('hasta') || '';
   const basePath = isAdmin ? '/admin/dashboard' : '/dashboard';
 
-  let ejecutivos = isAdmin ? getEjecutivos() : getTeamVendedores(user);
+  let ejecutivos = personalDash
+    ? [user]
+    : isAdmin
+      ? getEjecutivos()
+      : getTeamVendedores(user);
   if (paisSel) ejecutivos = ejecutivos.filter((u) => u.pais === paisSel);
   if (ejecutivoSel) ejecutivos = ejecutivos.filter((u) => u.id === ejecutivoSel);
   const teamIds = new Set(ejecutivos.map((u) => u.id));
@@ -1304,6 +1341,10 @@ function renderDashboard() {
 
   const salidasAll = (state.salidas || []).filter((s) => {
     if (!teamIds.has(s.vendedorId)) return false;
+    if (clienteSel) {
+      const name = String(s.cliente_registro_salida || '').trim().toLowerCase();
+      if (name !== clienteSel.trim().toLowerCase()) return false;
+    }
     const day = dashboardDayKey(s.fecha_registro_salida || s.createdAt);
     return inRange(day);
   });
@@ -1415,19 +1456,33 @@ function renderDashboard() {
     const merged = {
       tab: tabSel,
       pais: paisSel,
-      ejecutivo: ejecutivoSel,
+      ejecutivo: personalDash ? '' : ejecutivoSel,
+      cliente: personalDash ? clienteSel : '',
       desde,
       hasta,
       ...extra,
     };
-    if (merged.tab && merged.tab !== 'global') q.set('tab', merged.tab);
-    for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
+    if (!personalDash && merged.tab && merged.tab !== 'global') q.set('tab', merged.tab);
+    for (const key of personalDash
+      ? ['cliente', 'desde', 'hasta']
+      : ['pais', 'ejecutivo', 'desde', 'hasta']) {
       const v = String(merged[key] || '').trim();
       if (v) q.set(key, v);
     }
     const qs = q.toString();
     return qs ? `${basePath}?${qs}` : basePath;
   };
+
+  const misClientesOpts = personalDash
+    ? getClientesDe(user)
+        .map(
+          (c) =>
+            `<option value="${escapeHtml(c.nombre)}" ${
+              clienteSel === c.nombre ? 'selected' : ''
+            }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
+        )
+        .join('')
+    : '';
 
   const presetActive = (d, h) => desde === d && hasta === h;
   const hoy = dashIsoDay(0);
@@ -1467,25 +1522,29 @@ function renderDashboard() {
     ${emptyHint}
     <div class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Totales del periodo</div>
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      ${kpi('Salidas', salidasAll.length, 'Veces que un vendedor registró “voy a salir”.')}
+      ${kpi('Salidas', salidasAll.length, personalDash ? 'Veces que registró “voy a salir”.' : 'Veces que un vendedor registró “voy a salir”.')}
       ${kpi('Visitas hechas', visitadas.length, 'Salidas ya cerradas con reporte.')}
-      ${kpi('Pendientes', pendientes.length, 'Salieron y aún no reportaron.')}
+      ${kpi('Pendientes', pendientes.length, personalDash ? 'Salió y aún no reportó.' : 'Salieron y aún no reportaron.')}
       ${kpi('% cerrado', `${cierrePct}%`, 'De cada 100 salidas, cuántas ya se reportaron.')}
       ${kpi('Km totales', Math.round(kmTotal * 100) / 100, 'Suma de kilómetros GPS de las visitas.')}
       ${kpi('Km promedio', kmAvg, 'Kilómetros típicos por visita cerrada.')}
       ${kpi('Con foto', conFoto, 'Visitas que sí llevaron evidencia.')}
-      ${kpi('Clientes en cartera', clientes, 'Clientes activos de los ejecutivos filtrados.')}
-      ${kpi('Citas agendadas', citasProg, 'Visitas programadas por el jefe, aún sin registrar.')}
+      ${kpi('Clientes en cartera', clientes, personalDash ? 'Clientes activos en su cartera.' : 'Clientes activos de los ejecutivos filtrados.')}
+      ${kpi('Citas agendadas', citasProg, 'Visitas programadas aún sin registrar salida.')}
       ${kpi('% con foto', `${fotoPct}%`, 'De las visitas cerradas, cuántas llevan foto.')}
       ${kpi('Reportes tardíos', tardias, 'Visitas reportadas después del día esperado.')}
       ${kpi('% tardíos', `${tardioPct}%`, 'Qué porcentaje de visitas se reportó tarde.')}
-      ${kpi('Visitas / ejecutivo', visitasPorEjec, 'Promedio de visitas cerradas por vendedor.')}
-      ${kpi('Clientes / ejecutivo', clientesPorEjec, 'Promedio de clientes en cartera por vendedor.')}
+      ${
+        personalDash
+          ? ''
+          : `${kpi('Visitas / ejecutivo', visitasPorEjec, 'Promedio de visitas cerradas por vendedor.')}
+      ${kpi('Clientes / ejecutivo', clientesPorEjec, 'Promedio de clientes en cartera por vendedor.')}`
+      }
     </div>
 
     <div class="mt-5 grid gap-4 lg:grid-cols-2">
       ${chartCard(
-        '¿Cuántas salidas y visitas hubo por día?',
+        personalDash ? '¿Cuántas salidas y visitas hizo por día?' : '¿Cuántas salidas y visitas hubo por día?',
         'Cada punto es un día. Rojo = salidas registradas. Verde = visitas ya cerradas.',
         'chart-actividad',
         true
@@ -1495,32 +1554,40 @@ function renderDashboard() {
         'Suma de kilómetros GPS del día (solo visitas ya cerradas).',
         'chart-km-dia'
       )}
-      ${chartCard(
-        '¿Quién cerró más visitas?',
-        'Barras por ejecutivo: salidas abiertas vs visitas ya reportadas.',
-        'chart-ejecutivos',
-        true
-      )}
+      ${
+        personalDash
+          ? ''
+          : `${chartCard(
+              '¿Quién cerró más visitas?',
+              'Barras por ejecutivo: salidas abiertas vs visitas ya reportadas.',
+              'chart-ejecutivos',
+              true
+            )}
       ${chartCard(
         '¿Quién recorrió más kilómetros?',
         'Comparación de kilómetros GPS por ejecutivo en el periodo.',
         'chart-km-ejec'
-      )}
+      )}`
+      }
       ${chartCard(
-        '¿Por qué motivo visitan?',
+        personalDash ? '¿Por qué motivo visita?' : '¿Por qué motivo visitan?',
         'Tipos de visita más usados cuando cierran el reporte.',
         'chart-tipos'
       )}
       ${chartCard(
-        '¿Qué día de la semana visitan más?',
+        personalDash ? '¿Qué día de la semana visita más?' : '¿Qué día de la semana visitan más?',
         'Cuántas visitas cerradas caen en cada día (domingo a sábado).',
         'chart-semana'
       )}
-      ${chartCard(
-        '¿En qué país hay más visitas cerradas?',
-        'Visitas reportadas según el país del ejecutivo.',
-        'chart-paises'
-      )}
+      ${
+        personalDash
+          ? ''
+          : chartCard(
+              '¿En qué país hay más visitas cerradas?',
+              'Visitas reportadas según el país del ejecutivo.',
+              'chart-paises'
+            )
+      }
     </div>`;
 
   const ejecutivosBody = `
@@ -1566,14 +1633,22 @@ function renderDashboard() {
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">¿Cómo va el trabajo de campo?</h2>
-      <p class="mt-1 max-w-3xl text-sm text-slate-500">Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.</p>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va su trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
+      <p class="mt-1 max-w-3xl text-sm text-slate-500">${
+        personalDash
+          ? 'Solo ve sus propias salidas y visitas. Puede filtrar por cliente.'
+          : 'Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.'
+      }</p>
     </div>
 
-    <div class="mb-4 flex flex-wrap gap-2">
+    ${
+      personalDash
+        ? ''
+        : `<div class="mb-4 flex flex-wrap gap-2">
       <button data-nav="${escapeHtml(buildQuery({ tab: 'global' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'global' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Global</button>
       <button data-nav="${escapeHtml(buildQuery({ tab: 'ejecutivos' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'ejecutivos' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Ejecutivos</button>
-    </div>
+    </div>`
+    }
 
     <div class="mb-3 flex flex-wrap gap-2">
       <button data-nav="${escapeHtml(buildQuery({ desde: hoy, hasta: hoy }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${presetActive(hoy, hoy) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Hoy</button>
@@ -1582,9 +1657,18 @@ function renderDashboard() {
       <button data-nav="${escapeHtml(buildQuery({ desde: '', hasta: '' }))}" class="rounded-full border px-3 py-1.5 text-xs font-bold ${!desde && !hasta ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Todo el historial</button>
     </div>
 
-    <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
+    <form id="dash-filters" class="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 ${personalDash ? 'lg:grid-cols-4' : 'lg:grid-cols-5'}">
       <input type="hidden" name="tab" value="${tabSel}" />
-      <div>
+      ${
+        personalDash
+          ? `<div class="sm:col-span-2">
+        <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Cliente</label>
+        <select name="cliente" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Todos mis clientes</option>
+          ${misClientesOpts}
+        </select>
+      </div>`
+          : `<div>
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">País</label>
         <select name="pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
           <option value="">Todos</option>
@@ -1598,7 +1682,8 @@ function renderDashboard() {
           <option value="">Todos</option>
           ${allEjecOptions}
         </select>
-      </div>
+      </div>`
+      }
       <div>
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Desde</label>
         <input type="date" name="desde" value="${escapeHtml(desde)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
@@ -1607,13 +1692,13 @@ function renderDashboard() {
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Hasta</label>
         <input type="date" name="hasta" value="${escapeHtml(hasta)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
       </div>
-      <div class="flex items-end gap-2">
+      <div class="flex items-end gap-2 ${personalDash ? 'sm:col-span-2' : ''}">
         <button class="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white hover:bg-red-700">Aplicar</button>
         <button type="button" id="dash-clear" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600">Limpiar</button>
       </div>
     </form>
 
-    ${tabSel === 'ejecutivos' ? ejecutivosBody : globalBody}
+    ${!personalDash && tabSel === 'ejecutivos' ? ejecutivosBody : globalBody}
     `,
     { title: 'Dashboard', showBack: true, backTo: isAdmin ? '/admin' : '/', wide: true }
   );
@@ -1625,16 +1710,20 @@ function renderDashboard() {
     e.preventDefault();
     const fd = new FormData(e.target);
     const q = new URLSearchParams();
-    const tab = String(fd.get('tab') || tabSel || 'global');
-    if (tab === 'ejecutivos') q.set('tab', 'ejecutivos');
-    for (const key of ['pais', 'ejecutivo', 'desde', 'hasta']) {
+    if (!personalDash) {
+      const tab = String(fd.get('tab') || tabSel || 'global');
+      if (tab === 'ejecutivos') q.set('tab', 'ejecutivos');
+    }
+    for (const key of personalDash
+      ? ['cliente', 'desde', 'hasta']
+      : ['pais', 'ejecutivo', 'desde', 'hasta']) {
       const v = String(fd.get(key) || '').trim();
       if (v) q.set(key, v);
     }
     go(q.toString() ? `${basePath}?${q}` : basePath, { replace: true, animate: false });
   });
   document.getElementById('dash-clear')?.addEventListener('click', () => {
-    go(tabSel === 'ejecutivos' ? `${basePath}?tab=ejecutivos` : basePath, {
+    go(!personalDash && tabSel === 'ejecutivos' ? `${basePath}?tab=ejecutivos` : basePath, {
       replace: true,
       animate: false,
     });
@@ -1809,6 +1898,8 @@ function renderCartera() {
   const params = new URLSearchParams(location.search);
   const q = (params.get('q') || '').toLowerCase();
   const editId = params.get('edit') || '';
+  const addOpen = params.get('add') === '1';
+  const editingContactId = params.get('cid') || '';
   let clients = getClientesDe(user);
   if (q) {
     clients = clients.filter((c) =>
@@ -1817,78 +1908,112 @@ function renderCartera() {
         .join(' ')}`.toLowerCase().includes(q)
     );
   }
-  const editing = editId ? clients.find((c) => c.id === editId) : null;
-  const editingContacts = editing ? listClientContacts(editing) : [];
+
+  const carteraUrl = (extra = {}) => {
+    const p = new URLSearchParams();
+    if (q) p.set('q', params.get('q') || '');
+    const merged = { edit: editId, add: addOpen ? '1' : '', cid: editingContactId, ...extra };
+    if (merged.edit) p.set('edit', merged.edit);
+    if (merged.add === '1') p.set('add', '1');
+    if (merged.cid) p.set('cid', merged.cid);
+    const qs = p.toString();
+    return qs ? `/cartera?${qs}` : '/cartera';
+  };
 
   app.innerHTML = shell(
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Mi cartera</p>
       <h2 class="mt-1 text-xl font-black text-slate-900">${clients.length} cliente${clients.length === 1 ? '' : 's'}</h2>
-      <p class="mt-1 text-sm text-slate-500">Agregue varios contactos por cliente; se precargan al registrar una salida.</p>
+      <p class="mt-1 text-sm text-slate-500">Toque la tarjeta del cliente para ver y gestionar contactos.</p>
     </div>
     <form id="form-buscar-cartera" class="mb-3 flex gap-2">
       <input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Buscar cliente, código o contacto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500" />
       <button class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase text-white">Buscar</button>
     </form>
-    ${
-      editing
-        ? `<section class="mb-4 rounded-2xl border border-red-100 bg-red-50/40 p-5">
-      <h3 class="text-sm font-black text-slate-900">${escapeHtml(editing.nombre)}</h3>
-      <p class="mt-0.5 text-xs text-slate-500">${escapeHtml(editing.codigo || '')} ${editing.pais ? `· ${escapeHtml(editing.pais)}` : ''}</p>
-      <div class="mt-3 space-y-2">
-        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-500">Contactos registrados</p>
-        ${
-          editingContacts.length
-            ? editingContacts
-                .map((ct) => {
-                  const removable = (editing.contactos || []).some((x) => x.id === ct.id);
-                  return `
-          <div class="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-            <div class="min-w-0">
-              <div class="text-sm font-semibold text-slate-900">${escapeHtml(ct.nombre)}${ct.cargo ? ` <span class="text-xs font-normal text-slate-400">(${escapeHtml(ct.cargo)})</span>` : ''}</div>
-              <div class="text-xs text-slate-500">${escapeHtml([ct.telefono, ct.telefono_fijo, ct.correo].filter(Boolean).join(' · ') || 'Sin datos')}</div>
-            </div>
-            ${
-              removable
-                ? `<button type="button" data-remove-contact="${escapeHtml(ct.id)}" class="shrink-0 text-[11px] font-bold text-slate-400 hover:text-red-600">Quitar</button>`
-                : ''
-            }
-          </div>`;
-                })
-                .join('')
-            : '<p class="text-sm text-slate-400">Aún no hay contactos. Agregue el primero abajo.</p>'
-        }
-      </div>
-      <form id="form-contacto" class="mt-4 grid gap-3 sm:grid-cols-2">
-        <p class="sm:col-span-2 text-xs font-bold uppercase tracking-wider text-red-700">+ Agregar contacto</p>
-        ${field('Nombre', 'nombre', { required: true, placeholder: 'Persona de contacto' })}
-        ${field('Cargo', 'cargo', { required: false, placeholder: 'Ej. GG, GO, compras' })}
-        ${field('Teléfono', 'telefono', { required: false, type: 'tel' })}
-        ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel' })}
-        ${field('Correo', 'correo', { required: false, type: 'email' })}
-        <div class="flex gap-2 sm:col-span-2">
-          <button class="flex-1 rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Agregar contacto</button>
-          <button type="button" id="btn-cancel-contacto" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600">Cerrar</button>
-        </div>
-      </form>
-    </section>`
-        : ''
-    }
     <div class="space-y-2">
       ${
         clients.length
           ? clients
               .map((c) => {
+                const open = editId === c.id;
                 const cts = listClientContacts(c);
+                const stored = c.contactos || [];
                 return `
-        <div class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div class="min-w-0 flex-1">
-            <div class="truncate text-sm font-black text-slate-900">${escapeHtml(c.nombre)}</div>
-            <div class="mt-0.5 truncate text-xs text-slate-500">${escapeHtml(c.codigo || 'Sin código')} · ${cts.length} contacto${cts.length === 1 ? '' : 's'}${cts[0] ? ` · ${escapeHtml(cts[0].nombre)}` : ''}</div>
-          </div>
-          <button data-edit-contact="${c.id}" class="shrink-0 text-xs font-bold text-red-600 hover:underline">Contactos</button>
-        </div>`;
+        <article class="rounded-2xl border ${open ? 'border-red-200 bg-red-50/30' : 'border-slate-200 bg-white'} shadow-sm overflow-hidden">
+          <button type="button" data-toggle-client="${c.id}" class="flex w-full items-center gap-3 p-4 text-left hover:bg-slate-50/80">
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-black text-slate-900">${escapeHtml(c.nombre)}</div>
+              <div class="mt-0.5 truncate text-xs text-slate-500">${escapeHtml(c.codigo || 'Sin código')}${c.pais ? ` · ${escapeHtml(c.pais)}` : ''} · ${cts.length} contacto${cts.length === 1 ? '' : 's'}${cts[0] ? ` · ${escapeHtml(cts[0].nombre)}` : ''}</div>
+            </div>
+            <span class="shrink-0 text-slate-400 text-lg leading-none">${open ? '▾' : '▸'}</span>
+          </button>
+          ${
+            open
+              ? `<div class="border-t border-red-100 px-4 pb-4 pt-3 space-y-3">
+            <div class="space-y-2">
+              ${
+                cts.length
+                  ? cts
+                      .map((ct) => {
+                        const inList = stored.some((x) => x.id === ct.id);
+                        const editingThis = editingContactId === ct.id && inList;
+                        if (editingThis) {
+                          return `
+              <form data-edit-contact-form="${escapeHtml(ct.id)}" class="grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2">
+                <p class="sm:col-span-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">Editar contacto</p>
+                ${field('Nombre', 'nombre', { required: true, value: ct.nombre, placeholder: 'Persona de contacto' })}
+                ${field('Cargo', 'cargo', { required: false, value: ct.cargo || '', placeholder: 'Ej. GG, GO, compras' })}
+                ${field('Teléfono', 'telefono', { required: false, type: 'tel', value: ct.telefono || '' })}
+                ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel', value: ct.telefono_fijo || '' })}
+                ${field('Correo', 'correo', { required: false, type: 'email', value: ct.correo || '' })}
+                <div class="flex gap-2 sm:col-span-2">
+                  <button class="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black uppercase text-white">Guardar</button>
+                  <button type="button" data-cancel-edit-contact class="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600">Cancelar</button>
+                </div>
+              </form>`;
+                        }
+                        return `
+              <div class="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <div class="min-w-0">
+                  <div class="text-sm font-semibold text-slate-900">${escapeHtml(ct.nombre)}${ct.cargo ? ` <span class="text-xs font-normal text-slate-400">(${escapeHtml(ct.cargo)})</span>` : ''}</div>
+                  <div class="text-xs text-slate-500">${escapeHtml([ct.telefono, ct.telefono_fijo, ct.correo].filter(Boolean).join(' · ') || 'Sin datos')}</div>
+                </div>
+                ${
+                  inList
+                    ? `<div class="flex shrink-0 gap-2">
+                  <button type="button" data-edit-contact="${escapeHtml(ct.id)}" class="text-[11px] font-bold text-red-600 hover:underline">Editar</button>
+                  <button type="button" data-remove-contact="${escapeHtml(ct.id)}" class="text-[11px] font-bold text-slate-400 hover:text-red-600">Borrar</button>
+                </div>`
+                    : `<span class="shrink-0 text-[10px] font-bold uppercase text-slate-400">Catálogo</span>`
+                }
+              </div>`;
+                      })
+                      .join('')
+                  : '<p class="text-sm text-slate-400">Aún no hay contactos.</p>'
+              }
+            </div>
+            <div>
+              <button type="button" data-toggle-add class="w-full rounded-xl border border-dashed border-red-300 bg-white px-4 py-3 text-xs font-black uppercase tracking-wide text-red-700 hover:bg-red-50">Agregar contacto</button>
+              ${
+                addOpen
+                  ? `<form id="form-contacto" class="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2">
+                ${field('Nombre', 'nombre', { required: true, placeholder: 'Persona de contacto' })}
+                ${field('Cargo', 'cargo', { required: false, placeholder: 'Ej. GG, GO, compras' })}
+                ${field('Teléfono', 'telefono', { required: false, type: 'tel' })}
+                ${field('Teléfono fijo', 'telefono_fijo', { required: false, type: 'tel' })}
+                ${field('Correo', 'correo', { required: false, type: 'email' })}
+                <div class="sm:col-span-2">
+                  <button class="w-full rounded-xl bg-red-600 px-5 py-3 text-sm font-black uppercase text-white hover:bg-red-700">Guardar contacto</button>
+                </div>
+              </form>`
+                  : ''
+              }
+            </div>
+          </div>`
+              : ''
+          }
+        </article>`;
               })
               .join('')
           : '<p class="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-400">Sin clientes en su cartera.</p>'
@@ -1903,23 +2028,63 @@ function renderCartera() {
     const value = new FormData(e.target).get('q') || '';
     go(value ? `/cartera?q=${encodeURIComponent(value)}` : '/cartera');
   });
-  document.querySelectorAll('[data-edit-contact]').forEach((btn) => {
-    btn.addEventListener('click', () => go(`/cartera?edit=${encodeURIComponent(btn.dataset.editContact)}`));
-  });
-  document.getElementById('btn-cancel-contacto')?.addEventListener('click', () => go('/cartera'));
-  document.querySelectorAll('[data-remove-contact]').forEach((btn) => {
+  document.querySelectorAll('[data-toggle-client]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (!editing || !confirm('¿Quitar este contacto de la lista?')) return;
-      removeClientContact(editing.id, btn.dataset.removeContact, getState().session);
+      const id = btn.dataset.toggleClient;
+      go(editId === id ? carteraUrl({ edit: '', add: '', cid: '' }) : carteraUrl({ edit: id, add: '', cid: '' }), {
+        replace: true,
+        animate: false,
+      });
+    });
+  });
+  document.querySelectorAll('[data-toggle-add]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      go(carteraUrl({ add: addOpen ? '' : '1', cid: '' }), { replace: true, animate: false });
+    });
+  });
+  document.querySelectorAll('[data-edit-contact]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      go(carteraUrl({ cid: btn.dataset.editContact, add: '' }), { replace: true, animate: false });
+    });
+  });
+  document.querySelectorAll('[data-cancel-edit-contact]').forEach((btn) => {
+    btn.addEventListener('click', () => go(carteraUrl({ cid: '' }), { replace: true, animate: false }));
+  });
+  document.querySelectorAll('[data-remove-contact]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!editId || !confirm('¿Quitar este contacto de la lista?')) return;
+      removeClientContact(editId, btn.dataset.removeContact, getState().session);
       showToast('Contacto eliminado.');
-      go(`/cartera?edit=${encodeURIComponent(editing.id)}`, { replace: true, animate: false });
+      go(carteraUrl({ cid: '' }), { replace: true, animate: false });
+    });
+  });
+  document.querySelectorAll('[data-edit-contact-form]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const { updated } = updateClientContactEntry(
+        editId,
+        form.dataset.editContactForm,
+        {
+          nombre: fd.get('nombre'),
+          cargo: fd.get('cargo'),
+          telefono: fd.get('telefono'),
+          telefono_fijo: fd.get('telefono_fijo'),
+          correo: fd.get('correo'),
+        },
+        getState().session
+      );
+      showToast(updated ? 'Contacto actualizado.' : 'No se pudo actualizar el contacto.', updated ? undefined : 'err');
+      go(carteraUrl({ cid: '' }), { replace: true, animate: false });
     });
   });
   document.getElementById('form-contacto')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const { added } = addClientContact(
-      editing.id,
+      editId,
       {
         nombre: fd.get('nombre'),
         cargo: fd.get('cargo'),
@@ -1930,49 +2095,34 @@ function renderCartera() {
       getState().session
     );
     showToast(added ? 'Contacto agregado.' : 'Ese contacto ya existía o no se pudo guardar.');
-    go(`/cartera?edit=${encodeURIComponent(editing.id)}`, { replace: true, animate: false });
+    go(carteraUrl({ add: '', cid: '' }), { replace: true, animate: false });
   });
 }
 
-function renderRegistrarCliente() {
+function renderMisSolicitudes() {
   const user = getState().session;
-  const mine = getState().clientRequests.filter((r) => r.vendedorId === user.id).slice(0, 8);
+  const mine = getState().clientRequests.filter((r) => r.vendedorId === user.id).slice(0, 12);
 
   app.innerHTML = shell(
     `
-    <form id="form-cliente" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <form id="form-solicitud-cliente" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        El prospecto se crea <strong>de inmediato</strong>, sin aprobación, y ya puede registrarle salidas. No entra a su cartera de clientes hasta que se apruebe su conversión.
+        Complete los datos del <strong>cliente activo</strong> que desea sumar a su cartera. Se notificará a su jefe de ventas
+        ${user.correo_jefe ? `(${escapeHtml(user.correo_jefe)})` : ''} para aprobar o rechazar.
       </div>
-      ${field('Nombre del prospecto (empresa)', 'nombre', { placeholder: 'Ej. Distribuidora ABC' })}
+      ${field('Nombre del cliente (empresa)', 'nombre', { placeholder: 'Ej. Distribuidora ABC' })}
+      ${field('Código (opcional)', 'codigo', { required: false, placeholder: 'Ej. CLI-001' })}
       ${field('Nombre de contacto', 'contacto', { placeholder: 'Persona de contacto', required: false })}
-      ${field('Teléfono', 'telefono', { type: 'tel', placeholder: 'Ej. 7777-8888', required: false })}
-      ${field('Ubicación / dirección', 'ubicacion', { placeholder: 'Dónde queda el prospecto', required: false })}
-      ${field('Notas', 'notas', { type: 'textarea', required: false, placeholder: 'Detalle adicional' })}
-      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Crear prospecto</button>
-    </form>
-
-    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Mis prospectos</h3>
-      <div class="mt-3 space-y-2">
-        ${(() => {
-          const prospectos = getProspectosDe(user);
-          if (!prospectos.length) return '<p class="text-sm text-slate-400">Aún no ha creado prospectos.</p>';
-          return prospectos
-            .map(
-              (p) => `
-            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-              <div>
-                <div class="text-sm font-bold text-slate-900">${escapeHtml(p.nombre)}</div>
-                <p class="text-[11px] text-slate-500">${escapeHtml(p.contacto || 'Sin contacto')}${p.telefono ? ` · ${escapeHtml(p.telefono)}` : ''}${p.ubicacion ? ` · ${escapeHtml(p.ubicacion)}` : ''}</p>
-              </div>
-              <button data-convertir="${p.id}" class="shrink-0 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">Pasar a cliente</button>
-            </div>`
-            )
-            .join('');
-        })()}
+      ${field('Cargo del contacto', 'contacto_rol', { required: false, placeholder: 'Ej. GG, compras' })}
+      <div class="grid gap-4 sm:grid-cols-2">
+        ${field('Teléfono', 'telefono', { type: 'tel', placeholder: 'Ej. 7777-8888', required: false })}
+        ${field('Teléfono fijo', 'telefono_fijo', { type: 'tel', required: false })}
       </div>
-    </section>
+      ${field('Correo de contacto', 'correo_contacto', { type: 'email', required: false })}
+      ${field('Ubicación / dirección', 'ubicacion', { placeholder: 'Referencia del cliente', required: false })}
+      ${field('Notas / justificación', 'notas', { type: 'textarea', required: false, placeholder: 'Detalle adicional para su jefe' })}
+      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Solicitar aprobación</button>
+    </form>
 
     <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Mis solicitudes</h3>
@@ -1998,48 +2148,42 @@ function renderRegistrarCliente() {
       </div>
     </section>
     `,
-    { title: 'Prospectos', showBack: true, backTo: '/' }
+    { title: 'Mis solicitudes', showBack: true, backTo: '/' }
   );
   bindShell('/');
-  bindFormSubmit('form-cliente', async (data) => {
-    createProspect(data, getState().session);
-    showToast('Prospecto creado. Ya puede registrarle salidas.');
-    go('/cliente');
-  });
-  document.querySelectorAll('[data-convertir]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const prospect = getProspectosDe(getState().session).find((p) => p.id === btn.dataset.convertir);
-      if (!prospect) return;
-      const nota = window.prompt(`¿Por qué “${prospect.nombre}” debe pasar a cliente?`) || '';
-      const session = getState().session;
-      const { request } = createClientRequest(
-        {
-          nombre: prospect.nombre,
-          contacto: prospect.contacto,
-          telefono: prospect.telefono,
-          notas: nota,
-          prospectId: prospect.id,
-        },
-        session
-      );
-      try {
-        const state = getState();
-        await sendToMake({
-          formulario: 'solicitud_cliente',
-          request_id: request.id,
-          nombre_cliente: request.nombre,
-          contacto_cliente: request.contacto,
-          telefono_cliente: request.telefono || '',
-          notas_solicitud: request.notas,
-          correo_ventas: state.correo_ventas,
-          accion: 'conversion_prospecto',
-        });
-        showToast('Solicitud de conversión enviada.');
-      } catch {
-        showToast('No se pudo completar la solicitud. Inténtelo nuevamente.', 'err');
-      }
-      render();
-    });
+  bindFormSubmit('form-solicitud-cliente', async (data, btn) => {
+    const session = getState().session;
+    if (!String(data.nombre || '').trim()) {
+      showToast('Indique el nombre del cliente.', 'err');
+      return;
+    }
+    btn.textContent = 'Enviando…';
+    const { request } = createClientRequest(data, session);
+    try {
+      await sendToMake({
+        formulario: 'solicitud_cliente',
+        request_id: request.id,
+        nombre_cliente: request.nombre,
+        codigo_cliente: request.codigo || '',
+        contacto_cliente: request.contacto,
+        cargo_contacto: request.contacto_rol || '',
+        telefono_cliente: request.telefono || '',
+        telefono_fijo: request.telefono_fijo || '',
+        correo_contacto: request.correo_contacto || '',
+        ubicacion_cliente: request.ubicacion || '',
+        notas_solicitud: request.notas,
+        correo_jefe: request.correo_jefe || session.correo_jefe || '',
+        correo_vendedor: session.correo || '',
+        correo_ventas: getState().correo_ventas,
+        vendedor: session.nombre,
+        pais: session.pais || '',
+        accion: 'nueva_solicitud',
+      });
+      showToast('Solicitud enviada. Su jefe recibirá la notificación para aprobar.');
+    } catch {
+      showToast('La solicitud quedó registrada, pero no se pudo notificar por correo. Avise a su jefe.', 'err');
+    }
+    go('/solicitudes', { replace: true, animate: false });
   });
 }
 
@@ -2752,13 +2896,21 @@ function renderAdminHistorial(basePath = '/admin/historial') {
 
 function renderAdminSolicitudes(basePath = '/admin/solicitudes') {
   const state = getState();
+  const user = state.session;
   const isAdminView = basePath.startsWith('/admin');
-  const pendingReqs = state.clientRequests.filter((r) => r.estado === 'pendiente');
+  const teamIds = isAdminView
+    ? null
+    : new Set([user.id, ...getTeamVendedores(user).map((t) => t.id)]);
+  const pendingReqs = state.clientRequests.filter((r) => {
+    if (r.estado !== 'pendiente') return false;
+    if (!teamIds) return true;
+    return teamIds.has(r.vendedorId);
+  });
   app.innerHTML = shell(
     `
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 class="text-sm font-black uppercase tracking-wider text-slate-900">Solicitudes</h3>
-      <p class="mt-1 text-xs text-slate-500">${isAdminView ? 'Apruebe o rechace altas pedidas por vendedores.' : 'Altas a cliente pedidas por su equipo.'}</p>
+      <p class="mt-1 text-xs text-slate-500">${isAdminView ? 'Apruebe o rechace altas pedidas por vendedores.' : 'Altas a cartera pedidas por su equipo.'}</p>
       <div class="mt-4 space-y-3">
         ${
           pendingReqs.length
@@ -2766,8 +2918,10 @@ function renderAdminSolicitudes(basePath = '/admin/solicitudes') {
                 .map(
                   (r) => `
           <div class="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
-            <div class="text-sm font-black text-slate-900">${escapeHtml(r.nombre)}</div>
-            <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')}${r.telefono ? ` · Tel: ${escapeHtml(r.telefono)}` : ''} · Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
+            <div class="text-sm font-black text-slate-900">${escapeHtml(r.nombre)}${r.codigo ? ` <span class="text-xs font-semibold text-slate-500">(${escapeHtml(r.codigo)})</span>` : ''}</div>
+            <div class="mt-0.5 text-xs text-slate-600">Contacto: ${escapeHtml(r.contacto || '—')}${r.contacto_rol ? ` (${escapeHtml(r.contacto_rol)})` : ''}${r.telefono ? ` · Tel: ${escapeHtml(r.telefono)}` : ''}${r.correo_contacto ? ` · ${escapeHtml(r.correo_contacto)}` : ''}</div>
+            ${r.ubicacion ? `<p class="mt-1 text-xs text-slate-500">Ubicación: ${escapeHtml(r.ubicacion)}</p>` : ''}
+            <div class="mt-0.5 text-xs text-slate-600">Solicitó: ${escapeHtml(r.vendedorNombre)}</div>
             ${r.notas ? `<p class="mt-1 text-xs text-slate-500">${escapeHtml(r.notas)}</p>` : ''}
             <div class="mt-3 flex flex-wrap gap-2">
               <button data-approve="${r.id}" class="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprobar</button>
@@ -3290,31 +3444,16 @@ function render() {
       renderCartera();
       break;
     case '/historial':
-      if (!isJefe(user)) {
-        go('/', { replace: true, animate: false });
-        return;
-      }
-      renderAdminHistorial('/historial');
+      go('/', { replace: true, animate: false });
       break;
     case '/solicitudes':
-      if (!isJefe(user)) {
-        go('/', { replace: true, animate: false });
-        return;
-      }
-      renderAdminSolicitudes('/solicitudes');
+      if (isJefe(user)) renderAdminSolicitudes('/solicitudes');
+      else renderMisSolicitudes();
       break;
     case '/citas':
-      if (!isJefe(user)) {
-        go('/', { replace: true, animate: false });
-        return;
-      }
       renderCitas();
       break;
     case '/dashboard':
-      if (!isJefe(user)) {
-        go('/', { replace: true, animate: false });
-        return;
-      }
       renderDashboard();
       break;
     case '/reintegro':
