@@ -1,19 +1,13 @@
 /**
  * Limpia salidas pendientes de amachuca y crea 4 nuevas:
  * 2 hoy, 1 viernes, 1 próxima semana. Deja un cliente libre para demo en vivo.
- *
- * Uso:
- *   node scripts/reseed-amachuca-pending.mjs
- * Env:
- *   PROD_URL, ADMIN_USER, ADMIN_PASS
  */
 const PROD_URL = (process.env.PROD_URL || 'https://ldda7xmuo9srl7t5wd1p0v4c.207.244.239.237.sslip.io').replace(
   /\/+$/,
   ''
 );
-const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'Ventas1234';
-const TARGET_EMAIL = 'amachuca@iakimi.com';
+const SELLER_USER = process.env.SELLER_USER || 'amachuca@iakimi.com';
+const SELLER_PASS = process.env.SELLER_PASS || 'amachuca12345';
 
 function isoDay(offsetDays = 0) {
   const d = new Date();
@@ -53,15 +47,12 @@ async function api(path, { method = 'GET', token, body } = {}) {
 
 const login = await api('/api/auth/login', {
   method: 'POST',
-  body: { usuario: ADMIN_USER, password: ADMIN_PASS },
+  body: { usuario: SELLER_USER, password: SELLER_PASS },
 });
 const token = login.token;
 const state = await api('/api/state', { token });
-
-const seller = (state.users || []).find(
-  (u) => String(u.correo || '').toLowerCase() === TARGET_EMAIL
-);
-if (!seller) throw new Error(`No está ${TARGET_EMAIL}`);
+const seller = state.session;
+if (!seller?.id) throw new Error('Sin sesión de vendedor');
 
 const clients = (state.clients || []).filter(
   (c) => c.vendedorId === seller.id && c.activo !== false && c.tipo !== 'prospecto'
@@ -83,12 +74,15 @@ const dates = [
   { fecha: proxSem, hora: '11:00', cliente: used[3] },
 ];
 
-const salidas = (state.salidas || []).filter(
-  (s) => !(s.vendedorId === seller.id && s.estado === 'pendiente')
-);
+const submitted = [];
+for (const s of state.salidas || []) {
+  if (s.vendedorId === seller.id && s.estado === 'pendiente') {
+    submitted.push({ ...s, estado: 'cancelada', cancelledAt: new Date().toISOString() });
+  }
+}
 
 for (const row of dates) {
-  salidas.unshift({
+  submitted.push({
     id: id('sal'),
     vendedorId: seller.id,
     vendedorNombre: seller.nombre || '',
@@ -112,18 +106,23 @@ for (const row of dates) {
 await api('/api/state', {
   method: 'PUT',
   token,
-  body: { ...state, salidas },
+  body: { ...state, salidas: submitted },
 });
+
+const verify = await api('/api/state', { token });
+const pending = (verify.salidas || []).filter(
+  (s) => s.vendedorId === seller.id && s.estado === 'pendiente'
+);
 
 console.log(
   JSON.stringify(
     {
       ok: true,
       seller: seller.correo,
-      pending: dates.map((d) => ({
-        fecha: d.fecha,
-        hora: d.hora,
-        cliente: d.cliente.nombre,
+      pending: pending.map((d) => ({
+        fecha: d.fecha_registro_salida,
+        hora: d.hora_registro_salida,
+        cliente: d.cliente_registro_salida,
       })),
       libre_para_demo: keptFree.nombre,
     },
