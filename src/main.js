@@ -40,6 +40,7 @@ import {
   getCitaById,
   markCitaRegistrada,
   cancelCita,
+  reprogramCita,
   isJefe,
   distanceKm,
   LEGACY_PAGO_LABEL,
@@ -625,9 +626,24 @@ function renderHome() {
         'visita'
       )}
       ${actionCard('/cartera', 'Mi cartera', 'Sus clientes y contactos.', 'usuarios')}
-      ${actionCard('/citas', 'Programar citas', isJefe(user) ? 'Agende visitas a su equipo o a usted.' : 'Agende visitas a futuro. La salida se registra aparte.', 'salida')}
-      ${actionCard('/dashboard', 'Dashboard', isJefe(user) ? 'Visitas y pendientes de su equipo.' : 'Sus visitas, salidas y métricas.', 'solicitudes')}
-      ${actionCard('/solicitudes', isJefe(user) ? 'Solicitudes del equipo' : 'Mis solicitudes', isJefe(user) ? 'Aprobar o rechazar altas a cartera.' : 'Solicitar agregar un cliente a su cartera.', 'solicitudes')}
+      ${actionCard(
+        '/citas',
+        'Programar citas',
+        isJefe(user) ? 'Agende visitas a su equipo o a usted.' : 'Programe visitas para usted.',
+        'salida'
+      )}
+      ${actionCard(
+        '/dashboard',
+        'Dashboard',
+        isJefe(user) ? 'Visitas y pendientes de su equipo.' : 'Sus visitas, salidas y métricas.',
+        'solicitudes'
+      )}
+      ${actionCard(
+        '/solicitudes',
+        isJefe(user) ? 'Solicitudes del equipo' : 'Mis solicitudes',
+        isJefe(user) ? 'Aprobar o rechazar altas a cartera.' : 'Solicitar agregar un cliente a su cartera.',
+        'solicitudes'
+      )}
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
     </div>
     ${
@@ -726,40 +742,132 @@ function bindFormSubmit(formId, handler) {
   });
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function timeToMinutes(hhmm) {
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function minutesToTime(total) {
+  const t = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${pad2(Math.floor(t / 60))}:${pad2(t % 60)}`;
+}
+
+/** Ventana de salida: fecha = hoy; hora entre ahora y ahora+30 min. */
+function salidaTimeWindow() {
+  const now = new Date();
+  const fecha = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const minHora = minutesToTime(cur);
+  const maxHora = minutesToTime(cur + 30);
+  return { fecha, minHora, maxHora, horaDefault: minHora };
+}
+
+function assertSalidaTimeWindow(fecha, hora) {
+  const win = salidaTimeWindow();
+  if (String(fecha) !== win.fecha) {
+    throw new Error('La fecha de salida debe ser la de hoy.');
+  }
+  const mins = timeToMinutes(hora);
+  const minM = timeToMinutes(win.minHora);
+  const maxM = timeToMinutes(win.maxHora);
+  if (mins == null || minM == null || maxM == null || mins < minM || mins > maxM) {
+    throw new Error(`La hora debe estar entre ${win.minHora} y ${win.maxHora} (máximo 30 minutos desde ahora).`);
+  }
+}
+
 function renderSalida() {
-  const { fecha, hora } = nowParts();
+  const win = salidaTimeWindow();
   const user = getState().session;
   const tipos = resolveOptions(user, 'tipos_salida');
-  const citaId = new URLSearchParams(location.search).get('cita') || '';
+  const params = new URLSearchParams(location.search);
+  const citaId = params.get('cita') || '';
+  const reprogramId = params.get('reprogram') || '';
   const citaRaw = citaId ? getCitaById(citaId) : null;
-  const cita =
+  let cita =
     citaRaw && citaRaw.vendedorId === user.id && citaRaw.estado === 'programada' ? citaRaw : null;
   const destinoItems = getClientesDe(user);
+  const hoy = win.fecha;
+  if (cita && cita.fecha !== hoy) {
+    showToast('Solo puede continuar una cita programada para hoy. Reprográmela si cambió de día.', 'err');
+    cita = null;
+    history.replaceState({}, '', '/salida');
+  }
   const citasPendientes = getCitasForUser(user.id)
     .filter((c) => c.estado === 'programada')
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
 
+  if (reprogramId && !cita) {
+    const rp = getCitaById(reprogramId);
+    if (rp && rp.vendedorId === user.id && rp.estado === 'programada') {
+      // se renderiza panel de reprogramación abajo vía query
+    }
+  }
+
   const inboxHtml =
-    !cita && citasPendientes.length
+    !cita && !reprogramId && citasPendientes.length
       ? `<section class="mb-4 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
         <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas pendientes de registrar salida</h3>
-        <p class="mt-1 text-xs text-slate-500">Elija una cita agendada. Al continuar se capturará su GPS en este momento.</p>
+        <p class="mt-1 text-xs text-slate-500">Solo puede continuar si la cita es para hoy. Si cambió de día, use Reprogramar.</p>
         <div class="mt-3 space-y-2">
           ${citasPendientes
-            .map(
-              (c) => `
+            .map((c) => {
+              const isToday = c.fecha === hoy;
+              return `
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
               <div class="min-w-0">
                 <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}</div>
-                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.creadoPorNombre || 'Agenda')}</p>
+                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.creadoPorNombre || 'Agenda')}${isToday ? '' : ' · Fecha futura'}</p>
               </div>
-              <button type="button" data-cita-salida="${c.id}" class="shrink-0 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-black uppercase tracking-tight text-white hover:bg-red-700">Continuar</button>
-            </div>`
-            )
+              <div class="flex shrink-0 flex-wrap gap-2">
+                <button type="button" data-reprogram-cita="${c.id}" class="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-black uppercase tracking-tight text-slate-700 hover:bg-slate-100">Reprogramar</button>
+                <button type="button" data-cita-salida="${c.id}" ${isToday ? '' : 'disabled'} class="rounded-xl px-3.5 py-2 text-xs font-black uppercase tracking-tight ${isToday ? 'bg-red-600 text-white hover:bg-red-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'}">Continuar</button>
+              </div>
+            </div>`;
+            })
             .join('')}
         </div>
       </section>`
       : '';
+
+  const reprogramCitaObj =
+    reprogramId && !cita
+      ? getCitasForUser(user.id).find((c) => c.id === reprogramId && c.estado === 'programada')
+      : null;
+
+  if (reprogramCitaObj) {
+    app.innerHTML = shell(
+      `
+      <form id="form-reprogram" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p class="text-sm text-slate-600">Reprogramar visita a <strong>${escapeHtml(reprogramCitaObj.clienteNombre)}</strong>.</p>
+        <div class="grid gap-4 sm:grid-cols-2">
+          ${field('Nueva fecha', 'fecha', { type: 'date', value: reprogramCitaObj.fecha || hoy })}
+          ${field('Nueva hora', 'hora', { type: 'time', value: reprogramCitaObj.hora || win.horaDefault, required: false })}
+        </div>
+        <div class="flex gap-2">
+          <button id="submit-btn" class="flex-1 rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase text-white hover:bg-red-700">Guardar nueva fecha</button>
+          <button type="button" data-nav="/salida" class="rounded-xl border border-slate-200 px-4 py-3.5 text-sm font-bold text-slate-600">Cancelar</button>
+        </div>
+      </form>
+      `,
+      { title: 'Reprogramar cita', showBack: true, backTo: '/salida' }
+    );
+    bindShell('/');
+    bindFormSubmit('form-reprogram', async (data) => {
+      if (!data.fecha) {
+        showToast('Indique la nueva fecha.', 'err');
+        return;
+      }
+      reprogramCita(reprogramCitaObj.id, { fecha: data.fecha, hora: data.hora || '' });
+      showToast('Cita reprogramada.');
+      go('/salida');
+    });
+    return;
+  }
 
   app.innerHTML = shell(
     `
@@ -767,8 +875,7 @@ function renderSalida() {
     <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       ${locationBannerHtml()}
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Al pulsar <strong>Registrar salida</strong>, se capturará su <strong>ubicación GPS</strong> (PC o teléfono) como punto A.
-        ${cita ? '' : ' También puede salir ad hoc eligiendo un cliente abajo.'}
+        Registro de salida es para el momento en que sale. La <strong>fecha queda en hoy</strong> y la <strong>hora solo puede adelantarse hasta 30 minutos</strong>. Al guardar se captura el GPS.
       </div>
       ${
         cita
@@ -776,34 +883,79 @@ function renderSalida() {
           : ''
       }
       <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: cita?.fecha || fecha })}
-        ${field('Hora', 'hora_registro_salida', { type: 'time', value: cita?.hora || hora })}
+        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: win.fecha, disabled: true })}
+        <div>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Hora</label>
+          <input name="hora_registro_salida" type="time" required value="${escapeHtml(win.horaDefault)}" min="${escapeHtml(win.minHora)}" max="${escapeHtml(win.maxHora)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+          <p class="mt-1 text-[11px] text-slate-400">Entre ${escapeHtml(win.minHora)} y ${escapeHtml(win.maxHora)}.</p>
+        </div>
       </div>
       ${
         cita
-          ? ''
-          : `<div class="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-          Solo clientes de su cartera. Los prospectos se gestionan en SAN; aquí no se crean.
-        </div>`
+          ? clientFieldsHtml({
+              nameField: 'cliente_registro_salida',
+              contactField: 'contacto_registro_salida',
+              phoneField: 'telefono_registro_salida',
+              selected: cita.clienteNombre || '',
+              contactValue: cita.contacto || '',
+              phoneValue: cita.telefono || '',
+              items: null,
+              withContactPicker: false,
+              freeForm: false,
+            })
+          : `<div>
+        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Tipo de destino</label>
+        <select name="tipo_destino" id="tipo-destino" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+          <option value="cliente" selected>Cliente de cartera</option>
+          <option value="prospecto">Prospecto</option>
+        </select>
+      </div>
+      <div id="bloque-cliente">
+        ${clientFieldsHtml({
+          nameField: 'cliente_registro_salida',
+          contactField: 'contacto_registro_salida',
+          phoneField: 'telefono_registro_salida',
+          selected: '',
+          contactValue: '',
+          phoneValue: '',
+          items: destinoItems,
+          withContactPicker: true,
+          freeForm: false,
+        })}
+      </div>
+      <div id="bloque-prospecto" class="hidden space-y-4">
+        <div>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Modalidad de prospección</label>
+          <select name="modalidad_prospecto" id="modalidad-prospecto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+            <option value="territorio">Territorio (zona / movilización)</option>
+            <option value="contacto">Contacto (prospecto conocido)</option>
+          </select>
+        </div>
+        <div id="prospecto-territorio" class="space-y-4">
+          ${field('Territorio / zona', 'territorio_prospecto', { required: false, placeholder: 'Ej. zona metropolitana, oriente, Merliot' })}
+          ${field('Notas de prospección', 'notas_prospecto', { type: 'textarea', required: false, placeholder: 'Qué busca en esa zona (opcional)' })}
+        </div>
+        <div id="prospecto-contacto" class="hidden space-y-4">
+          ${field('Empresa o prospecto', 'cliente_registro_salida_p', { required: false, placeholder: 'Nombre de la empresa / prospecto' })}
+          ${field('Nombre de contacto', 'contacto_registro_salida_p', { required: false, placeholder: 'Persona de contacto (opcional)' })}
+          ${field('Teléfono', 'telefono_registro_salida_p', { type: 'tel', required: false })}
+        </div>
+      </div>`
       }
-      ${clientFieldsHtml({
-        nameField: 'cliente_registro_salida',
-        contactField: 'contacto_registro_salida',
-        phoneField: 'telefono_registro_salida',
-        selected: cita?.clienteNombre || '',
-        contactValue: cita?.contacto || '',
-        phoneValue: cita?.telefono || '',
-        items: cita ? null : destinoItems,
-        withContactPicker: !cita,
-        freeForm: false,
-      })}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
         required: tipos.length > 0,
         value: optionsHtml(tipos),
       })}
-      ${field('Punto de referencia', 'punto_referencia', { placeholder: 'Referencia del destino' })}
-      ${field('Objetivo de la visita', 'objetivo_registro_salida', { type: 'textarea', placeholder: '¿Qué se busca lograr?', value: cita?.objetivo || '' })}
+      ${field('Punto de referencia', 'punto_referencia', {
+        placeholder: cita ? 'Referencia del destino' : 'Referencia del destino o zona',
+        value: '',
+      })}
+      ${field('Objetivo de la visita', 'objetivo_registro_salida', {
+        type: 'textarea',
+        placeholder: '¿Qué se busca lograr?',
+        value: cita?.objetivo || '',
+      })}
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-red-700">Registrar salida</button>
     </form>
     `,
@@ -812,36 +964,107 @@ function renderSalida() {
   bindShell('/');
   bindGpsBanner();
   document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
-    btn.addEventListener('click', () => go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`));
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`);
+    });
   });
-  // El contacto solo se precarga cuando la salida nace de una cita programada.
-  bindClientSelect(document.getElementById('form-salida'), { autofill: Boolean(cita) });
+  document.querySelectorAll('[data-reprogram-cita]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      go(`/salida?reprogram=${encodeURIComponent(btn.dataset.reprogramCita)}`);
+    });
+  });
+
+  const form = document.getElementById('form-salida');
+  if (!cita) {
+    const tipoSel = document.getElementById('tipo-destino');
+    const modSel = document.getElementById('modalidad-prospecto');
+    const bloqueCliente = document.getElementById('bloque-cliente');
+    const bloqueProspecto = document.getElementById('bloque-prospecto');
+    const pTerr = document.getElementById('prospecto-territorio');
+    const pCont = document.getElementById('prospecto-contacto');
+    const syncDestino = () => {
+      const isPros = tipoSel?.value === 'prospecto';
+      bloqueCliente?.classList.toggle('hidden', isPros);
+      bloqueProspecto?.classList.toggle('hidden', !isPros);
+      const clienteSelect = form.querySelector('[name="cliente_registro_salida"]');
+      if (clienteSelect) clienteSelect.required = !isPros;
+      if (!isPros) return;
+      const isTerr = modSel?.value !== 'contacto';
+      pTerr?.classList.toggle('hidden', !isTerr);
+      pCont?.classList.toggle('hidden', isTerr);
+    };
+    tipoSel?.addEventListener('change', syncDestino);
+    modSel?.addEventListener('change', syncDestino);
+    syncDestino();
+    bindClientSelect(form, { autofill: false });
+  } else {
+    bindClientSelect(form, { autofill: true });
+  }
+
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
-    const esNuevo = String(data._contacto_nuevo || '') === '1';
-    const clienteId = String(data._cliente_id || '').trim();
-    const nombreContacto = String(data.contacto_registro_salida || '').trim();
-    if (esNuevo && clienteId && nombreContacto) {
-      const guardar = confirm(
-        `¿Desea registrar «${nombreContacto}» como contacto nuevo de este cliente? Así aparecerá la próxima vez en la lista.`
-      );
-      if (guardar) {
-        addClientContact(
-          clienteId,
-          {
-            nombre: nombreContacto,
-            telefono: data.telefono_registro_salida || '',
-          },
-          session
+    assertSalidaTimeWindow(win.fecha, data.hora_registro_salida);
+    data.fecha_registro_salida = win.fecha;
+
+    const tipoDestino = cita ? 'cliente' : String(data.tipo_destino || 'cliente');
+    const modalidad = String(data.modalidad_prospecto || 'territorio');
+    if (tipoDestino === 'prospecto') {
+      if (modalidad === 'territorio') {
+        const terr = String(data.territorio_prospecto || '').trim();
+        if (!terr) throw new Error('Indique el territorio o zona de prospección.');
+        data.cliente_registro_salida = `Prospección · ${terr}`;
+        data.contacto_registro_salida = '';
+        data.telefono_registro_salida = '';
+        if (!String(data.punto_referencia || '').trim()) data.punto_referencia = terr;
+        if (!String(data.objetivo_registro_salida || '').trim() && data.notas_prospecto) {
+          data.objetivo_registro_salida = String(data.notas_prospecto);
+        }
+      } else {
+        const nombre = String(data.cliente_registro_salida_p || '').trim();
+        if (!nombre) throw new Error('Indique el nombre del prospecto o empresa.');
+        data.cliente_registro_salida = nombre;
+        data.contacto_registro_salida = String(data.contacto_registro_salida_p || '').trim();
+        data.telefono_registro_salida = String(data.telefono_registro_salida_p || '').trim();
+      }
+    } else {
+      const esNuevo = String(data._contacto_nuevo || '') === '1';
+      const clienteId = String(data._cliente_id || '').trim();
+      const nombreContacto = String(data.contacto_registro_salida || '').trim();
+      if (esNuevo && clienteId && nombreContacto) {
+        const guardar = confirm(
+          `¿Desea registrar «${nombreContacto}» como contacto nuevo de este cliente? Así aparecerá la próxima vez en la lista.`
         );
+        if (guardar) {
+          addClientContact(
+            clienteId,
+            {
+              nombre: nombreContacto,
+              telefono: data.telefono_registro_salida || '',
+            },
+            session
+          );
+        }
       }
     }
+
     const {
       _contacto_picker: _p,
       _cliente_id: _c,
       _contacto_nuevo: _n,
+      tipo_destino: _td,
+      modalidad_prospecto: _mp,
+      territorio_prospecto: _tp,
+      notas_prospecto: _np,
+      cliente_registro_salida_p: _cp,
+      contacto_registro_salida_p: _ctp,
+      telefono_registro_salida_p: _tpp,
       ...payload
     } = data;
+    payload.fecha_registro_salida = win.fecha;
+    payload.tipo_destino = tipoDestino;
+    payload.modalidad_prospecto = tipoDestino === 'prospecto' ? modalidad : '';
+
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
     btn.textContent = 'Enviando…';
@@ -1198,8 +1421,14 @@ function renderCitas() {
             <option value="">Seleccione un cliente</option>
           </select>
         </div>
-        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Se completa al elegir cliente' })}
-        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}
+        <div>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Contacto</label>
+          <select name="_contacto_picker" id="cita-contacto-picker" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+            <option value="">Primero elija cliente</option>
+          </select>
+        </div>
+        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Si elige Otro, escríbalo aquí', readonly: true })}
+        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888', readonly: true })}
         ${field('Fecha', 'fecha', { type: 'date', value: fecha })}
         ${field('Hora', 'hora', { type: 'time', value: hora })}
       </div>
@@ -1235,26 +1464,83 @@ function renderCitas() {
   const form = document.getElementById('form-cita');
   const vendedorSel = form.querySelector('[name="vendedorId"]');
   const clienteSel = form.querySelector('[name="clienteId"]');
+  const picker = form.querySelector('#cita-contacto-picker');
+  const contactInput = form.querySelector('[name="contacto"]');
+  const phoneInput = form.querySelector('[name="telefono"]');
   const fillClientes = () => {
     const vid = vendedorSel?.value || user.id;
     const clientes = getClientsByVendedor(vid).filter((c) => c.tipo !== 'prospecto');
     clienteSel.innerHTML =
       '<option value="">Seleccione un cliente</option>' +
       clientes
+        .map((c) => {
+          const contacts = listClientContacts(c);
+          const payload = encodeURIComponent(JSON.stringify(contacts));
+          return `<option value="${c.id}" data-nombre="${escapeHtml(c.nombre)}" data-contactos="${payload}">${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`;
+        })
+        .join('');
+    if (picker) {
+      picker.innerHTML = '<option value="">Primero elija cliente</option>';
+    }
+    if (contactInput) {
+      contactInput.value = '';
+      contactInput.setAttribute('readonly', 'readonly');
+    }
+    if (phoneInput) {
+      phoneInput.value = '';
+      phoneInput.setAttribute('readonly', 'readonly');
+    }
+  };
+  const fillPicker = () => {
+    const opt = clienteSel.selectedOptions[0];
+    let contacts = [];
+    try {
+      contacts = JSON.parse(decodeURIComponent(opt?.dataset.contactos || '%5B%5D'));
+    } catch {
+      contacts = [];
+    }
+    if (!picker) return;
+    picker.innerHTML =
+      '<option value="">Seleccione un contacto</option>' +
+      contacts
         .map(
           (c) =>
-            `<option value="${c.id}" data-nombre="${escapeHtml(c.nombre)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}">${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
+            `<option value="${escapeHtml(c.nombre)}" data-telefono="${escapeHtml(c.telefono || '')}">${escapeHtml(c.nombre)}${c.cargo ? ` (${escapeHtml(c.cargo)})` : ''}</option>`
         )
-        .join('');
+        .join('') +
+      '<option value="__otro__">Otro (escribir nuevo)</option>';
+    if (contactInput) {
+      contactInput.value = '';
+      contactInput.setAttribute('readonly', 'readonly');
+    }
+    if (phoneInput) {
+      phoneInput.value = '';
+      phoneInput.setAttribute('readonly', 'readonly');
+    }
+  };
+  const applyPicker = () => {
+    const pOpt = picker?.selectedOptions[0];
+    if (!pOpt || pOpt.value === '') return;
+    if (pOpt.value === '__otro__') {
+      contactInput?.removeAttribute('readonly');
+      phoneInput?.removeAttribute('readonly');
+      if (contactInput) contactInput.value = '';
+      if (phoneInput) phoneInput.value = '';
+      return;
+    }
+    if (contactInput) {
+      contactInput.value = pOpt.value;
+      contactInput.setAttribute('readonly', 'readonly');
+    }
+    if (phoneInput) {
+      phoneInput.value = pOpt.dataset.telefono || '';
+      phoneInput.setAttribute('readonly', 'readonly');
+    }
   };
   vendedorSel?.addEventListener?.('change', fillClientes);
   fillClientes();
-  clienteSel.addEventListener('change', () => {
-    const opt = clienteSel.selectedOptions[0];
-    if (!opt) return;
-    form.querySelector('[name="contacto"]').value = opt.dataset.contacto || '';
-    form.querySelector('[name="telefono"]').value = opt.dataset.telefono || '';
-  });
+  clienteSel.addEventListener('change', fillPicker);
+  picker?.addEventListener('change', applyPicker);
   document.querySelectorAll('[data-cancel-cita]').forEach((btn) => {
     btn.addEventListener('click', () => {
       cancelCita(btn.dataset.cancelCita);
@@ -1268,6 +1554,15 @@ function renderCitas() {
     const opt = clienteSel.selectedOptions[0];
     if (!opt?.value) {
       showToast('Elija un cliente.', 'err');
+      return;
+    }
+    const pVal = picker?.value || '';
+    if (!pVal) {
+      showToast('Elija un contacto o «Otro».', 'err');
+      return;
+    }
+    if (pVal === '__otro__' && !String(fd.get('contacto') || '').trim()) {
+      showToast('Escriba el nombre del contacto nuevo.', 'err');
       return;
     }
     createCita(
@@ -1314,8 +1609,13 @@ function renderDashboard() {
   const personalDash = !isAdmin && !isJefe(user);
   const state = getState();
   const params = new URLSearchParams(location.search);
-  const tabSel =
-    personalDash || params.get('tab') !== 'ejecutivos' ? 'global' : 'ejecutivos';
+  const tabSel = personalDash
+    ? params.get('tab') === 'clientes'
+      ? 'clientes'
+      : 'global'
+    : params.get('tab') === 'ejecutivos'
+      ? 'ejecutivos'
+      : 'global';
   const paisSel = personalDash ? '' : params.get('pais') || '';
   const ejecutivoSel = personalDash ? user.id : params.get('ejecutivo') || '';
   const clienteSel = personalDash ? params.get('cliente') || '' : '';
@@ -1341,6 +1641,7 @@ function renderDashboard() {
 
   const salidasAll = (state.salidas || []).filter((s) => {
     if (!teamIds.has(s.vendedorId)) return false;
+    if (personalDash && tabSel === 'clientes' && !clienteSel) return false;
     if (clienteSel) {
       const name = String(s.cliente_registro_salida || '').trim().toLowerCase();
       if (name !== clienteSel.trim().toLowerCase()) return false;
@@ -1462,7 +1763,11 @@ function renderDashboard() {
       hasta,
       ...extra,
     };
-    if (!personalDash && merged.tab && merged.tab !== 'global') q.set('tab', merged.tab);
+    if (personalDash) {
+      if (merged.tab === 'clientes') q.set('tab', 'clientes');
+    } else if (merged.tab && merged.tab !== 'global') {
+      q.set('tab', merged.tab);
+    }
     for (const key of personalDash
       ? ['cliente', 'desde', 'hasta']
       : ['pais', 'ejecutivo', 'desde', 'hasta']) {
@@ -1636,14 +1941,17 @@ function renderDashboard() {
       <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va su trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
       <p class="mt-1 max-w-3xl text-sm text-slate-500">${
         personalDash
-          ? 'Solo ve sus propias salidas y visitas. Puede filtrar por cliente.'
+          ? 'Solo ve sus propias salidas y visitas. Use Global para el total o Clientes para un cliente concreto.'
           : 'Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.'
       }</p>
     </div>
 
     ${
       personalDash
-        ? ''
+        ? `<div class="mb-4 flex flex-wrap gap-2">
+      <button data-nav="${escapeHtml(buildQuery({ tab: 'global', cliente: '' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'global' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Global</button>
+      <button data-nav="${escapeHtml(buildQuery({ tab: 'clientes' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'clientes' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Clientes</button>
+    </div>`
         : `<div class="mb-4 flex flex-wrap gap-2">
       <button data-nav="${escapeHtml(buildQuery({ tab: 'global' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'global' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Global</button>
       <button data-nav="${escapeHtml(buildQuery({ tab: 'ejecutivos' }))}" class="rounded-full border px-4 py-2 text-xs font-black uppercase tracking-wide ${tabSel === 'ejecutivos' ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}">Ejecutivos</button>
@@ -1661,13 +1969,15 @@ function renderDashboard() {
       <input type="hidden" name="tab" value="${tabSel}" />
       ${
         personalDash
-          ? `<div class="sm:col-span-2">
+          ? tabSel === 'clientes'
+            ? `<div class="sm:col-span-2">
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Cliente</label>
-        <select name="cliente" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
-          <option value="">Todos mis clientes</option>
+        <select name="cliente" required class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+          <option value="">Seleccione un cliente</option>
           ${misClientesOpts}
         </select>
       </div>`
+            : ''
           : `<div>
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">País</label>
         <select name="pais" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
@@ -1710,7 +2020,9 @@ function renderDashboard() {
     e.preventDefault();
     const fd = new FormData(e.target);
     const q = new URLSearchParams();
-    if (!personalDash) {
+    if (personalDash) {
+      if (tabSel === 'clientes') q.set('tab', 'clientes');
+    } else {
       const tab = String(fd.get('tab') || tabSel || 'global');
       if (tab === 'ejecutivos') q.set('tab', 'ejecutivos');
     }
@@ -1723,13 +2035,20 @@ function renderDashboard() {
     go(q.toString() ? `${basePath}?${q}` : basePath, { replace: true, animate: false });
   });
   document.getElementById('dash-clear')?.addEventListener('click', () => {
+    if (personalDash && tabSel === 'clientes') {
+      go(`${basePath}?tab=clientes`, { replace: true, animate: false });
+      return;
+    }
     go(!personalDash && tabSel === 'ejecutivos' ? `${basePath}?tab=ejecutivos` : basePath, {
       replace: true,
       animate: false,
     });
   });
 
-  if (tabSel !== 'global') return;
+  if (tabSel === 'ejecutivos') return;
+  if (personalDash && tabSel === 'clientes' && !clienteSel) {
+    // Sin cliente elegido aún: no dibujar gráficas vacías engañosas.
+  }
   const ChartLib = window.Chart;
   if (!ChartLib) return;
   const grid = { color: 'rgba(148,163,184,0.2)' };

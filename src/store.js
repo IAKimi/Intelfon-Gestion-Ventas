@@ -505,12 +505,8 @@ export async function login(usuario, password, expectedRole = '') {
 
 export function isJefe(user) {
   if (!user) return false;
-  if (user.rol === 'jefe' || user.es_jefe) return true;
-  const correo = String(user.correo || '').toLowerCase();
-  if (!correo) return false;
-  return getState().users.some(
-    (u) => u.rol !== 'admin' && String(u.correo_jefe || '').toLowerCase() === correo
-  );
+  // Solo rol explícito: evita que un vendedor se vea como jefe solo porque alguien lo puso en correo_jefe.
+  return user.rol === 'jefe';
 }
 
 export async function logout() {
@@ -1298,6 +1294,17 @@ export function cancelCita(citaId) {
   cita.estado = 'cancelada';
   save(state);
   return getState();
+}
+
+/** Reprograma fecha/hora de una cita aún programada. */
+export function reprogramCita(citaId, { fecha, hora } = {}) {
+  const state = ensureMemory();
+  const cita = (state.citas || []).find((c) => c.id === citaId);
+  if (!cita || cita.estado !== 'programada') return { state: getState(), cita: null };
+  if (fecha) cita.fecha = String(fecha).trim();
+  if (hora !== undefined) cita.hora = String(hora || '').trim();
+  save(state);
+  return { state: getState(), cita };
 }
 
 export const CATALOG_META = [

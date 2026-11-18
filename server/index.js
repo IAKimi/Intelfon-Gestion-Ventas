@@ -277,7 +277,8 @@ async function getAppPayload(sessionUser = null, full = false) {
   );
   const users = allUsers.map((u) => ({
     ...u,
-    es_jefe: u.rol === 'jefe' || jefeCorreos.has(String(u.correo || '').toLowerCase()),
+    // Flag de UI: solo rol jefe. El mapa correo_jefe sigue usándose para equipo.
+    es_jefe: u.rol === 'jefe',
   }));
 
   let clients = s.clients || [];
