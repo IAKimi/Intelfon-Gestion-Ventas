@@ -507,6 +507,18 @@ function bindClientSelect(form, { autofill = true } = {}) {
         '<option value="__otro__">Otro (escribir nuevo)</option>';
     };
 
+    const setEditable = (el, editable) => {
+      if (!el) return;
+      if (editable) {
+        el.removeAttribute('readonly');
+        el.classList.remove('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
+        el.classList.add('bg-white');
+      } else {
+        el.setAttribute('readonly', 'readonly');
+        el.classList.add('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
+        el.classList.remove('bg-white');
+      }
+    };
     const applyContact = () => {
       const contactInput = form.querySelector(`[name="${contactName}"]`);
       const phoneInput = phoneName ? form.querySelector(`[name="${phoneName}"]`) : null;
@@ -523,16 +535,17 @@ function bindClientSelect(form, { autofill = true } = {}) {
           if (contactInput) contactInput.value = '';
           if (phoneInput) phoneInput.value = '';
           if (nuevoFlag) nuevoFlag.value = '1';
-          contactInput?.removeAttribute('readonly');
-          phoneInput?.removeAttribute('readonly');
+          setEditable(contactInput, true);
+          setEditable(phoneInput, true);
+          contactInput?.focus();
         }
         return;
       }
       if (contactInput) contactInput.value = pOpt.value;
       if (phoneInput) phoneInput.value = pOpt.dataset.telefono || '';
       if (nuevoFlag) nuevoFlag.value = '0';
-      contactInput?.setAttribute('readonly', 'readonly');
-      phoneInput?.setAttribute('readonly', 'readonly');
+      setEditable(contactInput, false);
+      setEditable(phoneInput, false);
     };
 
     sel.addEventListener('change', () => {
@@ -874,9 +887,6 @@ function renderSalida() {
     ${inboxHtml}
     <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       ${locationBannerHtml()}
-      <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Registro de salida es para el momento en que sale. La <strong>fecha queda en hoy</strong> y la <strong>hora solo puede adelantarse hasta 30 minutos</strong>. Al guardar se captura el GPS.
-      </div>
       ${
         cita
           ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados. <a href="/salida" data-nav="/salida" class="font-bold underline">Cancelar y volver al buzón</a></div>`
@@ -1400,10 +1410,7 @@ function renderCitas() {
           )
           .join('')}`,
       })
-    : `<input type="hidden" name="vendedorId" value="${user.id}" />
-       <div class="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-sm text-slate-600 sm:col-span-2">
-         Agenda personal. Al llegar el día, registre la salida desde <strong>Registro de salida</strong> para capturar el GPS.
-       </div>`;
+    : `<input type="hidden" name="vendedorId" value="${user.id}" />`;
 
   app.innerHTML = shell(
     `
@@ -1411,7 +1418,7 @@ function renderCitas() {
       <p class="text-sm text-slate-500">${
         jefe
           ? 'La cita queda en agenda. El GPS se captura solo cuando el vendedor registra la salida.'
-          : 'Programe visitas a futuro. Programar no captura GPS: eso ocurre al registrar la salida.'
+          : 'Programe visitas a futuro. El día de la visita, registre la salida para capturar el GPS.'
       }</p>
       <div class="grid gap-4 sm:grid-cols-2">
         ${vendedorField}
@@ -1427,8 +1434,8 @@ function renderCitas() {
             <option value="">Primero elija cliente</option>
           </select>
         </div>
-        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Si elige Otro, escríbalo aquí', readonly: true })}
-        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888', readonly: true })}
+        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Si elige Otro, escríbalo aquí' })}
+        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}
         ${field('Fecha', 'fecha', { type: 'date', value: fecha })}
         ${field('Hora', 'hora', { type: 'time', value: hora })}
       </div>
@@ -1467,6 +1474,20 @@ function renderCitas() {
   const picker = form.querySelector('#cita-contacto-picker');
   const contactInput = form.querySelector('[name="contacto"]');
   const phoneInput = form.querySelector('[name="telefono"]');
+  const setContactEditable = (editable) => {
+    for (const el of [contactInput, phoneInput]) {
+      if (!el) continue;
+      if (editable) {
+        el.removeAttribute('readonly');
+        el.classList.remove('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
+        el.classList.add('bg-white');
+      } else {
+        el.setAttribute('readonly', 'readonly');
+        el.classList.add('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
+        el.classList.remove('bg-white');
+      }
+    }
+  };
   const fillClientes = () => {
     const vid = vendedorSel?.value || user.id;
     const clientes = getClientsByVendedor(vid).filter((c) => c.tipo !== 'prospecto');
@@ -1482,14 +1503,9 @@ function renderCitas() {
     if (picker) {
       picker.innerHTML = '<option value="">Primero elija cliente</option>';
     }
-    if (contactInput) {
-      contactInput.value = '';
-      contactInput.setAttribute('readonly', 'readonly');
-    }
-    if (phoneInput) {
-      phoneInput.value = '';
-      phoneInput.setAttribute('readonly', 'readonly');
-    }
+    if (contactInput) contactInput.value = '';
+    if (phoneInput) phoneInput.value = '';
+    setContactEditable(false);
   };
   const fillPicker = () => {
     const opt = clienteSel.selectedOptions[0];
@@ -1509,33 +1525,26 @@ function renderCitas() {
         )
         .join('') +
       '<option value="__otro__">Otro (escribir nuevo)</option>';
-    if (contactInput) {
-      contactInput.value = '';
-      contactInput.setAttribute('readonly', 'readonly');
-    }
-    if (phoneInput) {
-      phoneInput.value = '';
-      phoneInput.setAttribute('readonly', 'readonly');
-    }
+    if (contactInput) contactInput.value = '';
+    if (phoneInput) phoneInput.value = '';
+    setContactEditable(false);
   };
   const applyPicker = () => {
     const pOpt = picker?.selectedOptions[0];
-    if (!pOpt || pOpt.value === '') return;
-    if (pOpt.value === '__otro__') {
-      contactInput?.removeAttribute('readonly');
-      phoneInput?.removeAttribute('readonly');
-      if (contactInput) contactInput.value = '';
-      if (phoneInput) phoneInput.value = '';
+    if (!pOpt || pOpt.value === '') {
+      setContactEditable(false);
       return;
     }
-    if (contactInput) {
-      contactInput.value = pOpt.value;
-      contactInput.setAttribute('readonly', 'readonly');
+    if (pOpt.value === '__otro__') {
+      if (contactInput) contactInput.value = '';
+      if (phoneInput) phoneInput.value = '';
+      setContactEditable(true);
+      contactInput?.focus();
+      return;
     }
-    if (phoneInput) {
-      phoneInput.value = pOpt.dataset.telefono || '';
-      phoneInput.setAttribute('readonly', 'readonly');
-    }
+    if (contactInput) contactInput.value = pOpt.value;
+    if (phoneInput) phoneInput.value = pOpt.dataset.telefono || '';
+    setContactEditable(false);
   };
   vendedorSel?.addEventListener?.('change', fillClientes);
   fillClientes();
@@ -1819,7 +1828,11 @@ function renderDashboard() {
   const emptyHint =
     !salidasAll.length
       ? `<div class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Todavía no hay salidas ni visitas en este filtro. Cuando los vendedores registren salidas y cierren visitas con foto, aquí se llenan los números y las gráficas.
+          ${
+            personalDash
+              ? 'Todavía no tengo salidas ni visitas en este filtro. Cuando registre salidas y cierre visitas con foto, aquí se llenan mis números y gráficas.'
+              : 'Todavía no hay salidas ni visitas en este filtro. Cuando los vendedores registren salidas y cierren visitas con foto, aquí se llenan los números y las gráficas.'
+          }
         </div>`
       : '';
 
@@ -1827,18 +1840,76 @@ function renderDashboard() {
     ${emptyHint}
     <div class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Totales del periodo</div>
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      ${kpi('Salidas', salidasAll.length, personalDash ? 'Veces que registró “voy a salir”.' : 'Veces que un vendedor registró “voy a salir”.')}
-      ${kpi('Visitas hechas', visitadas.length, 'Salidas ya cerradas con reporte.')}
-      ${kpi('Pendientes', pendientes.length, personalDash ? 'Salió y aún no reportó.' : 'Salieron y aún no reportaron.')}
-      ${kpi('% cerrado', `${cierrePct}%`, 'De cada 100 salidas, cuántas ya se reportaron.')}
-      ${kpi('Km totales', Math.round(kmTotal * 100) / 100, 'Suma de kilómetros GPS de las visitas.')}
-      ${kpi('Km promedio', kmAvg, 'Kilómetros típicos por visita cerrada.')}
-      ${kpi('Con foto', conFoto, 'Visitas que sí llevaron evidencia.')}
-      ${kpi('Clientes en cartera', clientes, personalDash ? 'Clientes activos en su cartera.' : 'Clientes activos de los ejecutivos filtrados.')}
-      ${kpi('Citas agendadas', citasProg, 'Visitas programadas aún sin registrar salida.')}
-      ${kpi('% con foto', `${fotoPct}%`, 'De las visitas cerradas, cuántas llevan foto.')}
-      ${kpi('Reportes tardíos', tardias, 'Visitas reportadas después del día esperado.')}
-      ${kpi('% tardíos', `${tardioPct}%`, 'Qué porcentaje de visitas se reportó tarde.')}
+      ${kpi(
+        'Salidas',
+        salidasAll.length,
+        personalDash ? 'Veces que registré “voy a salir”.' : 'Veces que un vendedor registró “voy a salir”.'
+      )}
+      ${kpi(
+        'Visitas hechas',
+        visitadas.length,
+        personalDash ? 'Salidas mías ya cerradas con reporte.' : 'Salidas ya cerradas con reporte.'
+      )}
+      ${kpi(
+        'Pendientes',
+        pendientes.length,
+        personalDash ? 'Salí y aún no reporté la visita.' : 'Salieron y aún no reportaron.'
+      )}
+      ${kpi(
+        '% cerrado',
+        `${cierrePct}%`,
+        personalDash
+          ? 'De cada 100 salidas mías, cuántas ya reporté.'
+          : 'De cada 100 salidas, cuántas ya se reportaron.'
+      )}
+      ${kpi(
+        'Km totales',
+        Math.round(kmTotal * 100) / 100,
+        personalDash ? 'Kilómetros GPS que recorrí en visitas cerradas.' : 'Suma de kilómetros GPS de las visitas.'
+      )}
+      ${kpi(
+        'Km promedio',
+        kmAvg,
+        personalDash ? 'Kilómetros típicos por cada visita que cerré.' : 'Kilómetros típicos por visita cerrada.'
+      )}
+      ${kpi(
+        'Con foto',
+        conFoto,
+        personalDash ? 'Visitas mías que cerré con evidencia.' : 'Visitas que sí llevaron evidencia.'
+      )}
+      ${kpi(
+        'Clientes en cartera',
+        clientes,
+        personalDash ? 'Clientes activos que tengo en mi cartera.' : 'Clientes activos de los ejecutivos filtrados.'
+      )}
+      ${kpi(
+        'Citas agendadas',
+        citasProg,
+        personalDash
+          ? 'Visitas que tengo programadas y aún sin registrar salida.'
+          : 'Visitas programadas aún sin registrar salida.'
+      )}
+      ${kpi(
+        '% con foto',
+        `${fotoPct}%`,
+        personalDash
+          ? 'De las visitas que cerré, cuántas llevan foto.'
+          : 'De las visitas cerradas, cuántas llevan foto.'
+      )}
+      ${kpi(
+        'Reportes tardíos',
+        tardias,
+        personalDash
+          ? 'Visitas que reporté después del día esperado.'
+          : 'Visitas reportadas después del día esperado.'
+      )}
+      ${kpi(
+        '% tardíos',
+        `${tardioPct}%`,
+        personalDash
+          ? 'Qué porcentaje de mis visitas reporté tarde.'
+          : 'Qué porcentaje de visitas se reportó tarde.'
+      )}
       ${
         personalDash
           ? ''
@@ -1849,14 +1920,20 @@ function renderDashboard() {
 
     <div class="mt-5 grid gap-4 lg:grid-cols-2">
       ${chartCard(
-        personalDash ? '¿Cuántas salidas y visitas hizo por día?' : '¿Cuántas salidas y visitas hubo por día?',
-        'Cada punto es un día. Rojo = salidas registradas. Verde = visitas ya cerradas.',
+        personalDash
+          ? '¿Cuántas salidas y visitas hice por día?'
+          : '¿Cuántas salidas y visitas hubo por día?',
+        personalDash
+          ? 'Cada punto es un día. Rojo = mis salidas. Verde = visitas que ya cerré.'
+          : 'Cada punto es un día. Rojo = salidas registradas. Verde = visitas ya cerradas.',
         'chart-actividad',
         true
       )}
       ${chartCard(
-        '¿Cuántos kilómetros se recorrieron por día?',
-        'Suma de kilómetros GPS del día (solo visitas ya cerradas).',
+        personalDash ? '¿Cuántos kilómetros recorrí por día?' : '¿Cuántos kilómetros se recorrieron por día?',
+        personalDash
+          ? 'Suma de mis kilómetros GPS del día (solo visitas que ya cerré).'
+          : 'Suma de kilómetros GPS del día (solo visitas ya cerradas).',
         'chart-km-dia'
       )}
       ${
@@ -1875,13 +1952,21 @@ function renderDashboard() {
       )}`
       }
       ${chartCard(
-        personalDash ? '¿Por qué motivo visita?' : '¿Por qué motivo visitan?',
-        'Tipos de visita más usados cuando cierran el reporte.',
+        personalDash
+          ? '¿Cuál es el mayor motivo por el que visito a clientes?'
+          : '¿Por qué motivo visitan?',
+        personalDash
+          ? 'Tipos de visita que más he utilizado cuando cierro reportes.'
+          : 'Tipos de visita más usados cuando cierran el reporte.',
         'chart-tipos'
       )}
       ${chartCard(
-        personalDash ? '¿Qué día de la semana visita más?' : '¿Qué día de la semana visitan más?',
-        'Cuántas visitas cerradas caen en cada día (domingo a sábado).',
+        personalDash
+          ? '¿Qué día de la semana visito más?'
+          : '¿Qué día de la semana visitan más?',
+        personalDash
+          ? 'En qué días de la semana cierro más visitas (domingo a sábado).'
+          : 'Cuántas visitas cerradas caen en cada día (domingo a sábado).',
         'chart-semana'
       )}
       ${
@@ -1938,10 +2023,10 @@ function renderDashboard() {
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va su trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va mi trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
       <p class="mt-1 max-w-3xl text-sm text-slate-500">${
         personalDash
-          ? 'Solo ve sus propias salidas y visitas. Use Global para el total o Clientes para un cliente concreto.'
+          ? 'Solo veo mis salidas y visitas. Global es el total; Clientes filtra uno concreto.'
           : 'Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.'
       }</p>
     </div>
