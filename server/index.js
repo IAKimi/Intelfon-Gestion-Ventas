@@ -447,6 +447,36 @@ app.post('/api/auth/logout', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+/** El usuario autenticado cambia su propia contraseña (actual + nueva). */
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || req.body?.password_actual || '');
+    const newPassword = String(req.body?.newPassword || req.body?.password_nueva || '').trim();
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Indique la contraseña actual y la nueva.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+    }
+    const { rows } = await pool.query('SELECT id, password_hash FROM users WHERE id = $1', [
+      req.user.id,
+    ]);
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const ok = await bcrypt.compare(currentPassword, row.password_hash);
+    if (!ok) return res.status(401).json({ error: 'La contraseña actual no es correcta.' });
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [
+      hash,
+      req.user.id,
+    ]);
+    res.json({ ok: true, message: 'Contraseña actualizada.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo cambiar la contraseña.' });
+  }
+});
+
 app.get('/api/state', requireAuth, async (req, res) => {
   try {
     const state = await getAppPayload(req.user);

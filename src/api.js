@@ -56,6 +56,13 @@ export async function apiLogout() {
   }
 }
 
+export async function apiChangePassword(currentPassword, newPassword) {
+  return request('/api/auth/change-password', {
+    method: 'POST',
+    body: { currentPassword, newPassword },
+  });
+}
+
 export async function apiGetState() {
   return request('/api/state');
 }

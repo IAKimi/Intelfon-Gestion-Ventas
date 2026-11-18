@@ -2,6 +2,7 @@ import {
   getState,
   login,
   logout,
+  changePassword,
   initStore,
   updateConfig,
   upsertUser,
@@ -323,6 +324,7 @@ function shell(content, { title = '', showBack = false, backTo = '/', wide = fal
                     <div class="text-xs font-bold text-slate-900">${escapeHtml(user.nombre)}</div>
                     <div class="text-[11px] text-slate-500">${escapeHtml(user.cargo || '')}</div>
                   </div>
+                  <button type="button" data-nav="/cuenta" class="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-bold text-slate-700 transition hover:border-red-200 hover:text-red-600 sm:px-3 sm:text-xs" title="Cambiar contraseña">Clave</button>
                   <button id="btn-logout" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-red-200 hover:text-red-600">Salir</button>
                 </div>`
               : ''
@@ -354,6 +356,44 @@ function bindShell(logoutTo = '/') {
 function homeForRole(user) {
   if (user?.rol === 'admin') return '/admin';
   return '/';
+}
+
+function renderChangePassword() {
+  const user = getState().session;
+  if (!user) {
+    go('/', { replace: true });
+    return;
+  }
+  const backTo = user.rol === 'admin' ? '/admin' : '/';
+  app.innerHTML = shell(
+    `
+    <form id="form-cambiar-clave" class="mx-auto max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <p class="text-sm text-slate-500">Actualice su contraseña. Indique la actual y la nueva (sin confirmación).</p>
+      ${field('Usuario', 'usuario_display', {
+        value: user.usuario || user.correo || '',
+        disabled: true,
+        required: false,
+      })}
+      ${field('Contraseña actual', 'password_actual', {
+        type: 'password',
+        placeholder: 'La que usa hoy',
+      })}
+      ${field('Contraseña nueva', 'password_nueva', {
+        type: 'password',
+        placeholder: 'Mínimo 6 caracteres',
+      })}
+      <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg hover:bg-red-700">Guardar contraseña</button>
+    </form>
+    `,
+    { title: 'Cambiar contraseña', showBack: true, backTo }
+  );
+  bindShell(backTo);
+  bindFormSubmit('form-cambiar-clave', async (data, btn) => {
+    btn.textContent = 'Guardando…';
+    await changePassword(data.password_actual, data.password_nueva);
+    showToast('Contraseña actualizada.');
+    go(backTo);
+  });
 }
 
 function renderLogin() {
@@ -4134,6 +4174,15 @@ function render() {
 
   if (path === '/admin/login') {
     go(user?.rol === 'admin' ? '/admin' : '/', { replace: true, animate: false });
+    return;
+  }
+
+  if (path === '/cuenta') {
+    if (!user) {
+      go('/', { replace: true, animate: false });
+      return;
+    }
+    renderChangePassword();
     return;
   }
 

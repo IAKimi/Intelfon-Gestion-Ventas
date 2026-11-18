@@ -1,6 +1,7 @@
 import { DEFAULT_WEBHOOK_URL } from './config.js';
 import {
   apiAvailable,
+  apiChangePassword,
   apiGetState,
   apiLogin,
   apiLogout,
@@ -522,6 +523,29 @@ export function isJefe(user) {
 export async function logout() {
   if (remoteMode) await apiLogout();
   setSession(null);
+}
+
+/** Cambia la contraseña del usuario en sesión (remoto: API; local: store). */
+export async function changePassword(currentPassword, newPassword) {
+  const session = getState().session;
+  if (!session) throw new Error('Debe iniciar sesión.');
+  const current = String(currentPassword || '');
+  const next = String(newPassword || '').trim();
+  if (!current || !next) throw new Error('Indique la contraseña actual y la nueva.');
+  if (next.length < 6) throw new Error('La nueva contraseña debe tener al menos 6 caracteres.');
+
+  if (remoteMode) {
+    await apiChangePassword(current, next);
+    return true;
+  }
+
+  const state = ensureMemory();
+  const user = state.users.find((u) => u.id === session.id);
+  if (!user) throw new Error('Usuario no encontrado.');
+  if (user.password !== current) throw new Error('La contraseña actual no es correcta.');
+  user.password = next;
+  save(state);
+  return true;
 }
 
 export function resolveCombustible(user) {
