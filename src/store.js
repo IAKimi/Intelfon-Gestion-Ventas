@@ -1248,6 +1248,7 @@ export function createCita(data, creator) {
     fecha: data.fecha || '',
     hora: data.hora || '',
     objetivo: String(data.objetivo || '').trim(),
+    tipoDestino: data.tipoDestino === 'prospecto' ? 'prospecto' : 'cliente',
     estado: 'programada',
     salidaId: null,
     createdAt: new Date().toISOString(),

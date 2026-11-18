@@ -482,21 +482,8 @@ export async function ensureLocationAccess() {
 }
 
 export function locationBannerHtml() {
-  if (status === 'granted') {
-    const approx = lastFix?.source === 'ip';
-    return `
-      <div id="gps-banner" class="mb-4 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-        <span class="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500"></span>
-        <div class="min-w-0 flex-1">
-          <div class="text-sm font-bold text-emerald-900">Ubicación activa${approx ? ' (aproximada por red)' : ''}</div>
-          <p class="mt-0.5 text-xs text-emerald-800/80">${
-            approx
-              ? 'En PC se usa ubicación por red de inmediato. Si el navegador ya tiene permiso GPS, se mejora sola en segundo plano.'
-              : 'Lista para registrar salidas y visitas (PC o teléfono).'
-          }</p>
-        </div>
-      </div>`;
-  }
+  // Chip del home ya indica GPS activo (IP|GPS); no repetir banner verde.
+  if (status === 'granted') return '';
 
   const desktop = isLikelyDesktop();
   const messages = {

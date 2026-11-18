@@ -48,6 +48,7 @@ import {
 import { getGps, fileToDataUrl, sendToMake } from './webhook.js';
 import {
   ensureLocationAccess,
+  getLastFix,
   getLocationStatus,
   hasUsableLocation,
   isLikelyDesktop,
@@ -593,6 +594,7 @@ function renderHome() {
   const notes = getUserNotifications(user.id);
   const unread = notes.filter((n) => !n.leida).length;
   const gpsOk = hasUsableLocation();
+  const gpsSource = getLastFix()?.source === 'gps' ? 'GPS' : gpsOk ? 'IP' : '';
   const pendingVisitas = getPendingSalidas(user.id).length;
 
   app.innerHTML = shell(
@@ -614,7 +616,7 @@ function renderHome() {
             : 'border-amber-200 bg-amber-50 text-amber-800'
         }">
           <span class="h-2 w-2 rounded-full ${gpsOk ? 'bg-emerald-500' : 'bg-amber-500'}"></span>
-          GPS ${gpsOk ? 'activo' : 'pendiente'}
+          GPS ${gpsOk ? `activo (${gpsSource})` : 'pendiente'}
         </div>
         ${
           unread
@@ -626,7 +628,6 @@ function renderHome() {
       </div>
     </div>
 
-    ${locationBannerHtml()}
 
     <div id="notes-panel" class="mb-4 hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div class="mb-2 flex items-center justify-between">
@@ -780,6 +781,60 @@ function bindFormSubmit(formId, handler) {
   });
 }
 
+/** Pantalla previa: Cliente de cartera vs Prospección. */
+function destinoChooserHtml(basePath, { subtitle = '' } = {}) {
+  return `
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      ${subtitle ? `<p class="mb-4 text-sm text-slate-500">${subtitle}</p>` : ''}
+      <p class="mb-3 text-xs font-black uppercase tracking-wider text-slate-400">¿A dónde va?</p>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <button type="button" data-nav="${escapeHtml(`${basePath}?modo=cliente`)}" class="card-lift rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-8 text-left transition hover:border-red-300 hover:bg-red-50/40">
+          <div class="text-lg font-black text-slate-900">Cliente</div>
+          <p class="mt-1 text-sm text-slate-500">Visita a un cliente activo de su cartera.</p>
+        </button>
+        <button type="button" data-nav="${escapeHtml(`${basePath}?modo=prospecto`)}" class="card-lift rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-8 text-left transition hover:border-red-300 hover:bg-red-50/40">
+          <div class="text-lg font-black text-slate-900">Prospección</div>
+          <p class="mt-1 text-sm text-slate-500">Territorio o contacto que aún no está en cartera.</p>
+        </button>
+      </div>
+    </section>`;
+}
+
+function prospectoFieldsHtml({ namePrefix = '', required = false } = {}) {
+  const n = (s) => (namePrefix ? `${namePrefix}${s}` : s);
+  return `
+    <input type="hidden" name="tipo_destino" value="prospecto" />
+    <div>
+      <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Modalidad de prospección</label>
+      <select name="modalidad_prospecto" id="modalidad-prospecto" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+        <option value="territorio">Territorio (zona / movilización)</option>
+        <option value="contacto">Contacto (prospecto conocido)</option>
+      </select>
+    </div>
+    <div id="prospecto-territorio" class="space-y-4">
+      ${field('Territorio / zona', n('territorio_prospecto'), { required, placeholder: 'Ej. zona metropolitana, oriente, Merliot' })}
+      ${field('Notas de prospección', n('notas_prospecto'), { type: 'textarea', required: false, placeholder: 'Qué busca en esa zona (opcional)' })}
+    </div>
+    <div id="prospecto-contacto" class="hidden space-y-4">
+      ${field('Empresa o prospecto', n('cliente_registro_salida_p'), { required: false, placeholder: 'Nombre de la empresa / prospecto' })}
+      ${field('Nombre de contacto', n('contacto_registro_salida_p'), { required: false, placeholder: 'Persona de contacto (opcional)' })}
+      ${field('Teléfono', n('telefono_registro_salida_p'), { type: 'tel', required: false })}
+    </div>`;
+}
+
+function bindProspectoModalidad(root = document) {
+  const modSel = root.querySelector('#modalidad-prospecto') || document.getElementById('modalidad-prospecto');
+  const pTerr = root.querySelector('#prospecto-territorio') || document.getElementById('prospecto-territorio');
+  const pCont = root.querySelector('#prospecto-contacto') || document.getElementById('prospecto-contacto');
+  const sync = () => {
+    const isTerr = modSel?.value !== 'contacto';
+    pTerr?.classList.toggle('hidden', !isTerr);
+    pCont?.classList.toggle('hidden', isTerr);
+  };
+  modSel?.addEventListener('change', sync);
+  sync();
+}
+
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
@@ -825,6 +880,7 @@ function renderSalida() {
   const params = new URLSearchParams(location.search);
   const citaId = params.get('cita') || '';
   const reprogramId = params.get('reprogram') || '';
+  const modo = params.get('modo') === 'prospecto' ? 'prospecto' : params.get('modo') === 'cliente' ? 'cliente' : '';
   const citaRaw = citaId ? getCitaById(citaId) : null;
   let cita =
     citaRaw && citaRaw.vendedorId === user.id && citaRaw.estado === 'programada' ? citaRaw : null;
@@ -839,15 +895,8 @@ function renderSalida() {
     .filter((c) => c.estado === 'programada')
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
 
-  if (reprogramId && !cita) {
-    const rp = getCitaById(reprogramId);
-    if (rp && rp.vendedorId === user.id && rp.estado === 'programada') {
-      // se renderiza panel de reprogramación abajo vía query
-    }
-  }
-
   const inboxHtml =
-    !cita && !reprogramId && citasPendientes.length
+    !cita && !reprogramId && !modo && citasPendientes.length
       ? `<section class="mb-4 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
         <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas pendientes de registrar salida</h3>
         <p class="mt-1 text-xs text-slate-500">Solo puede continuar si la cita es para hoy. Si cambió de día, use Reprogramar.</p>
@@ -907,45 +956,48 @@ function renderSalida() {
     return;
   }
 
-  app.innerHTML = shell(
-    `
-    ${inboxHtml}
-    <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      ${locationBannerHtml()}
-      ${
-        cita
-          ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados. <a href="/salida" data-nav="/salida" class="font-bold underline">Cancelar y volver al buzón</a></div>`
-          : ''
-      }
-      <div class="grid gap-4 sm:grid-cols-2">
-        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: win.fecha, disabled: true })}
-        <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Hora</label>
-          <input name="hora_registro_salida" type="time" required value="${escapeHtml(win.horaDefault)}" min="${escapeHtml(win.minHora)}" max="${escapeHtml(win.maxHora)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
-          <p class="mt-1 text-[11px] text-slate-400">Entre ${escapeHtml(win.minHora)} y ${escapeHtml(win.maxHora)}.</p>
-        </div>
-      </div>
-      ${
-        cita
-          ? clientFieldsHtml({
-              nameField: 'cliente_registro_salida',
-              contactField: 'contacto_registro_salida',
-              phoneField: 'telefono_registro_salida',
-              selected: cita.clienteNombre || '',
-              contactValue: cita.contacto || '',
-              phoneValue: cita.telefono || '',
-              items: null,
-              withContactPicker: false,
-              freeForm: false,
-            })
-          : `<div>
-        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Tipo de destino</label>
-        <select name="tipo_destino" id="tipo-destino" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-          <option value="cliente" selected>Cliente de cartera</option>
-          <option value="prospecto">Prospecto</option>
-        </select>
-      </div>
-      <div id="bloque-cliente">
+  // Paso 1: elegir Cliente vs Prospección
+  if (!cita && !modo) {
+    app.innerHTML = shell(
+      `
+      ${inboxHtml}
+      ${destinoChooserHtml('/salida', {
+        subtitle: 'Elija si registra salida hacia un cliente de cartera o una prospección.',
+      })}
+      `,
+      { title: 'Registro de salida', showBack: true, backTo: '/' }
+    );
+    bindShell('/');
+    document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`);
+      });
+    });
+    document.querySelectorAll('[data-reprogram-cita]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        go(`/salida?reprogram=${encodeURIComponent(btn.dataset.reprogramCita)}`);
+      });
+    });
+    return;
+  }
+
+  const esProspecto = !cita && modo === 'prospecto';
+  const destinoBlock = cita
+    ? clientFieldsHtml({
+        nameField: 'cliente_registro_salida',
+        contactField: 'contacto_registro_salida',
+        phoneField: 'telefono_registro_salida',
+        selected: cita.clienteNombre || '',
+        contactValue: cita.contacto || '',
+        phoneValue: cita.telefono || '',
+        items: null,
+        withContactPicker: false,
+        freeForm: false,
+      })
+    : esProspecto
+      ? prospectoFieldsHtml()
+      : `<input type="hidden" name="tipo_destino" value="cliente" />
         ${clientFieldsHtml({
           nameField: 'cliente_registro_salida',
           contactField: 'contacto_registro_salida',
@@ -956,27 +1008,29 @@ function renderSalida() {
           items: destinoItems,
           withContactPicker: true,
           freeForm: false,
-        })}
-      </div>
-      <div id="bloque-prospecto" class="hidden space-y-4">
-        <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Modalidad de prospección</label>
-          <select name="modalidad_prospecto" id="modalidad-prospecto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-            <option value="territorio">Territorio (zona / movilización)</option>
-            <option value="contacto">Contacto (prospecto conocido)</option>
-          </select>
-        </div>
-        <div id="prospecto-territorio" class="space-y-4">
-          ${field('Territorio / zona', 'territorio_prospecto', { required: false, placeholder: 'Ej. zona metropolitana, oriente, Merliot' })}
-          ${field('Notas de prospección', 'notas_prospecto', { type: 'textarea', required: false, placeholder: 'Qué busca en esa zona (opcional)' })}
-        </div>
-        <div id="prospecto-contacto" class="hidden space-y-4">
-          ${field('Empresa o prospecto', 'cliente_registro_salida_p', { required: false, placeholder: 'Nombre de la empresa / prospecto' })}
-          ${field('Nombre de contacto', 'contacto_registro_salida_p', { required: false, placeholder: 'Persona de contacto (opcional)' })}
-          ${field('Teléfono', 'telefono_registro_salida_p', { type: 'tel', required: false })}
-        </div>
-      </div>`
+        })}`;
+
+  app.innerHTML = shell(
+    `
+    <form id="form-salida" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      ${locationBannerHtml()}
+      ${
+        cita
+          ? `<div class="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">Cita programada por <strong>${escapeHtml(cita.creadoPorNombre)}</strong>. Los datos del cliente ya vienen cargados. <a href="/salida" data-nav="/salida" class="font-bold underline">Cancelar y volver al buzón</a></div>`
+          : `<div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              <span>${esProspecto ? 'Prospección' : 'Cliente de cartera'}</span>
+              <a href="/salida" data-nav="/salida" class="text-xs font-bold text-red-600 underline">Cambiar tipo</a>
+            </div>`
       }
+      <div class="grid gap-4 sm:grid-cols-2">
+        ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: win.fecha, disabled: true })}
+        <div>
+          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Hora</label>
+          <input name="hora_registro_salida" type="time" required value="${escapeHtml(win.horaDefault)}" min="${escapeHtml(win.minHora)}" max="${escapeHtml(win.maxHora)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+          <p class="mt-1 text-[11px] text-slate-400">Entre ${escapeHtml(win.minHora)} y ${escapeHtml(win.maxHora)}.</p>
+        </div>
+      </div>
+      ${destinoBlock}
       ${field('Tipo de salida', 'tipo_registro_salida', {
         type: 'select',
         required: tipos.length > 0,
@@ -998,43 +1052,12 @@ function renderSalida() {
   );
   bindShell('/');
   bindGpsBanner();
-  document.querySelectorAll('[data-cita-salida]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      go(`/salida?cita=${encodeURIComponent(btn.dataset.citaSalida)}`);
-    });
-  });
-  document.querySelectorAll('[data-reprogram-cita]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      go(`/salida?reprogram=${encodeURIComponent(btn.dataset.reprogramCita)}`);
-    });
-  });
 
   const form = document.getElementById('form-salida');
-  if (!cita) {
-    const tipoSel = document.getElementById('tipo-destino');
-    const modSel = document.getElementById('modalidad-prospecto');
-    const bloqueCliente = document.getElementById('bloque-cliente');
-    const bloqueProspecto = document.getElementById('bloque-prospecto');
-    const pTerr = document.getElementById('prospecto-territorio');
-    const pCont = document.getElementById('prospecto-contacto');
-    const syncDestino = () => {
-      const isPros = tipoSel?.value === 'prospecto';
-      bloqueCliente?.classList.toggle('hidden', isPros);
-      bloqueProspecto?.classList.toggle('hidden', !isPros);
-      const clienteSelect = form.querySelector('[name="cliente_registro_salida"]');
-      if (clienteSelect) clienteSelect.required = !isPros;
-      if (!isPros) return;
-      const isTerr = modSel?.value !== 'contacto';
-      pTerr?.classList.toggle('hidden', !isTerr);
-      pCont?.classList.toggle('hidden', isTerr);
-    };
-    tipoSel?.addEventListener('change', syncDestino);
-    modSel?.addEventListener('change', syncDestino);
-    syncDestino();
-    bindClientSelect(form, { autofill: false });
+  if (esProspecto) {
+    bindProspectoModalidad(form);
   } else {
-    bindClientSelect(form, { autofill: true });
+    bindClientSelect(form, { autofill: Boolean(cita) });
   }
 
   bindFormSubmit('form-salida', async (data, btn) => {
@@ -1414,6 +1437,8 @@ function renderCitas() {
   const jefe = isJefe(user);
   const team = jefe ? getTeamVendedores(user) : [];
   const { fecha, hora } = nowParts();
+  const params = new URLSearchParams(location.search);
+  const modo = params.get('modo') === 'prospecto' ? 'prospecto' : params.get('modo') === 'cliente' ? 'cliente' : '';
   const citas = (getState().citas || [])
     .filter((c) =>
       jefe
@@ -1424,6 +1449,57 @@ function renderCitas() {
     )
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
 
+  const citasListHtml = `
+    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas programadas</h3>
+      <div class="mt-3 space-y-2">
+        ${
+          citas.length
+            ? citas
+                .map(
+                  (c) => `
+            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <div>
+                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}${jefe ? ` · ${escapeHtml(c.vendedorNombre)}` : ''}${c.tipoDestino === 'prospecto' ? ' · Prospección' : ''}</div>
+                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.estado)}</p>
+              </div>
+              ${c.estado === 'programada' ? `<button data-cancel-cita="${c.id}" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Cancelar</button>` : ''}
+            </div>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400">Aún no ha programado citas.</p>'
+        }
+      </div>
+    </section>`;
+
+  const bindCancelCitas = () => {
+    document.querySelectorAll('[data-cancel-cita]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        cancelCita(btn.dataset.cancelCita);
+        showToast('Cita cancelada.');
+        render();
+      });
+    });
+  };
+
+  if (!modo) {
+    app.innerHTML = shell(
+      `
+      ${destinoChooserHtml('/citas', {
+        subtitle: jefe
+          ? 'Elija si agenda visita a un cliente de cartera o una prospección. El GPS se captura al registrar la salida.'
+          : 'Elija Cliente o Prospección. El día de la visita, registre la salida para capturar el GPS.',
+      })}
+      ${citasListHtml}
+      `,
+      { title: 'Programar citas', showBack: true, backTo: '/' }
+    );
+    bindShell('/');
+    bindCancelCitas();
+    return;
+  }
+
+  const esProspecto = modo === 'prospecto';
   const vendedorField = jefe
     ? field('Vendedor', 'vendedorId', {
         type: 'select',
@@ -1437,16 +1513,9 @@ function renderCitas() {
       })
     : `<input type="hidden" name="vendedorId" value="${user.id}" />`;
 
-  app.innerHTML = shell(
-    `
-    <form id="form-cita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p class="text-sm text-slate-500">${
-        jefe
-          ? 'La cita queda en agenda. El GPS se captura solo cuando el vendedor registra la salida.'
-          : 'Programe visitas a futuro. El día de la visita, registre la salida para capturar el GPS.'
-      }</p>
-      <div class="grid gap-4 sm:grid-cols-2">
-        ${vendedorField}
+  const destinoFields = esProspecto
+    ? `<div class="space-y-4 sm:col-span-2">${prospectoFieldsHtml()}</div>`
+    : `
         <div class="${jefe ? '' : 'sm:col-span-2'}">
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
           <select name="clienteId" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
@@ -1460,40 +1529,84 @@ function renderCitas() {
           </select>
         </div>
         ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Si elige Otro, escríbalo aquí' })}
-        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}
+        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}`;
+
+  app.innerHTML = shell(
+    `
+    <form id="form-cita" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        <span>${esProspecto ? 'Prospección' : 'Cliente de cartera'}</span>
+        <a href="/citas" data-nav="/citas" class="text-xs font-bold text-red-600 underline">Cambiar tipo</a>
+      </div>
+      <div class="grid gap-4 sm:grid-cols-2">
+        ${vendedorField}
+        ${destinoFields}
         ${field('Fecha', 'fecha', { type: 'date', value: fecha })}
         ${field('Hora', 'hora', { type: 'time', value: hora })}
       </div>
       ${field('Objetivo de la visita', 'objetivo', { type: 'textarea', required: false, placeholder: '¿Qué se busca lograr?' })}
       <button id="submit-btn" class="inline-flex w-full items-center justify-center rounded-xl bg-red-600 px-5 py-3.5 text-sm font-black uppercase tracking-tight text-white shadow-lg hover:bg-red-700">Programar cita</button>
     </form>
-
-    <section class="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Citas programadas</h3>
-      <div class="mt-3 space-y-2">
-        ${
-          citas.length
-            ? citas
-                .map(
-                  (c) => `
-            <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-              <div>
-                <div class="text-sm font-bold text-slate-900">${escapeHtml(c.clienteNombre)}${jefe ? ` · ${escapeHtml(c.vendedorNombre)}` : ''}</div>
-                <p class="text-[11px] text-slate-500">${escapeHtml(c.fecha)}${c.hora ? ` · ${escapeHtml(c.hora)}` : ''} · ${escapeHtml(c.estado)}</p>
-              </div>
-              ${c.estado === 'programada' ? `<button data-cancel-cita="${c.id}" class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">Cancelar</button>` : ''}
-            </div>`
-                )
-                .join('')
-            : '<p class="text-sm text-slate-400">Aún no ha programado citas.</p>'
-        }
-      </div>
-    </section>
+    ${citasListHtml}
     `,
     { title: 'Programar citas', showBack: true, backTo: '/' }
   );
   bindShell('/');
+  bindCancelCitas();
   const form = document.getElementById('form-cita');
+
+  if (esProspecto) {
+    bindProspectoModalidad(form);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const modalidad = String(fd.get('modalidad_prospecto') || 'territorio');
+      let clienteNombre = '';
+      let contacto = '';
+      let telefono = '';
+      let objetivo = String(fd.get('objetivo') || '').trim();
+      if (modalidad === 'territorio') {
+        const terr = String(fd.get('territorio_prospecto') || '').trim();
+        if (!terr) {
+          showToast('Indique el territorio o zona de prospección.', 'err');
+          return;
+        }
+        clienteNombre = `Prospección · ${terr}`;
+        const notas = String(fd.get('notas_prospecto') || '').trim();
+        if (!objetivo && notas) objetivo = notas;
+      } else {
+        clienteNombre = String(fd.get('cliente_registro_salida_p') || '').trim();
+        if (!clienteNombre) {
+          showToast('Indique el nombre del prospecto o empresa.', 'err');
+          return;
+        }
+        contacto = String(fd.get('contacto_registro_salida_p') || '').trim();
+        telefono = String(fd.get('telefono_registro_salida_p') || '').trim();
+      }
+      createCita(
+        {
+          vendedorId: String(fd.get('vendedorId') || user.id),
+          clienteId: '',
+          clienteNombre,
+          contacto,
+          telefono,
+          fecha: String(fd.get('fecha') || ''),
+          hora: String(fd.get('hora') || ''),
+          objetivo,
+          tipoDestino: 'prospecto',
+        },
+        user
+      );
+      showToast(
+        jefe && String(fd.get('vendedorId')) !== user.id
+          ? 'Cita programada. El vendedor ya la puede ver.'
+          : 'Cita programada. Recuerde registrar la salida el día de la visita.'
+      );
+      go('/citas');
+    });
+    return;
+  }
+
   const vendedorSel = form.querySelector('[name="vendedorId"]');
   const clienteSel = form.querySelector('[name="clienteId"]');
   const picker = form.querySelector('#cita-contacto-picker');
@@ -1575,13 +1688,6 @@ function renderCitas() {
   fillClientes();
   clienteSel.addEventListener('change', fillPicker);
   picker?.addEventListener('change', applyPicker);
-  document.querySelectorAll('[data-cancel-cita]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      cancelCita(btn.dataset.cancelCita);
-      showToast('Cita cancelada.');
-      render();
-    });
-  });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -1609,6 +1715,7 @@ function renderCitas() {
         fecha: String(fd.get('fecha') || ''),
         hora: String(fd.get('hora') || ''),
         objetivo: String(fd.get('objetivo') || ''),
+        tipoDestino: 'cliente',
       },
       user
     );
@@ -1617,7 +1724,7 @@ function renderCitas() {
         ? 'Cita programada. El vendedor ya la puede ver.'
         : 'Cita programada. Recuerde registrar la salida el día de la visita.'
     );
-    render();
+    go('/citas');
   });
 }
 
@@ -1855,7 +1962,7 @@ function renderDashboard() {
       ? `<div class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           ${
             personalDash
-              ? 'Todavía no tengo salidas ni visitas en este filtro. Cuando registre salidas y cierre visitas con foto, aquí se llenan mis números y gráficas.'
+              ? 'Todavía no hay salidas ni visitas en este filtro. Al registrar salidas y cerrar visitas con foto, aquí se llenan los números y las gráficas.'
               : 'Todavía no hay salidas ni visitas en este filtro. Cuando los vendedores registren salidas y cierren visitas con foto, aquí se llenan los números y las gráficas.'
           }
         </div>`
@@ -1868,71 +1975,71 @@ function renderDashboard() {
       ${kpi(
         'Salidas',
         salidasAll.length,
-        personalDash ? 'Veces que registré “voy a salir”.' : 'Veces que un vendedor registró “voy a salir”.'
+        personalDash ? 'Veces que se registró “voy a salir”.' : 'Veces que un vendedor registró “voy a salir”.'
       )}
       ${kpi(
         'Visitas hechas',
         visitadas.length,
-        personalDash ? 'Salidas mías ya cerradas con reporte.' : 'Salidas ya cerradas con reporte.'
+        personalDash ? 'Salidas ya cerradas con reporte.' : 'Salidas ya cerradas con reporte.'
       )}
       ${kpi(
         'Pendientes',
         pendientes.length,
-        personalDash ? 'Salí y aún no reporté la visita.' : 'Salieron y aún no reportaron.'
+        personalDash ? 'Salidas aún sin reporte de visita.' : 'Salieron y aún no reportaron.'
       )}
       ${kpi(
         '% cerrado',
         `${cierrePct}%`,
         personalDash
-          ? 'De cada 100 salidas mías, cuántas ya reporté.'
+          ? 'De cada 100 salidas, cuántas ya tienen reporte.'
           : 'De cada 100 salidas, cuántas ya se reportaron.'
       )}
       ${kpi(
         'Km totales',
         Math.round(kmTotal * 100) / 100,
-        personalDash ? 'Kilómetros GPS que recorrí en visitas cerradas.' : 'Suma de kilómetros GPS de las visitas.'
+        personalDash ? 'Kilómetros GPS de las visitas cerradas.' : 'Suma de kilómetros GPS de las visitas.'
       )}
       ${kpi(
         'Km promedio',
         kmAvg,
-        personalDash ? 'Kilómetros típicos por cada visita que cerré.' : 'Kilómetros típicos por visita cerrada.'
+        personalDash ? 'Kilómetros típicos por visita cerrada.' : 'Kilómetros típicos por visita cerrada.'
       )}
       ${kpi(
         'Con foto',
         conFoto,
-        personalDash ? 'Visitas mías que cerré con evidencia.' : 'Visitas que sí llevaron evidencia.'
+        personalDash ? 'Visitas cerradas con evidencia fotográfica.' : 'Visitas que sí llevaron evidencia.'
       )}
       ${kpi(
         'Clientes en cartera',
         clientes,
-        personalDash ? 'Clientes activos que tengo en mi cartera.' : 'Clientes activos de los ejecutivos filtrados.'
+        personalDash ? 'Clientes activos en la cartera.' : 'Clientes activos de los ejecutivos filtrados.'
       )}
       ${kpi(
         'Citas agendadas',
         citasProg,
         personalDash
-          ? 'Visitas que tengo programadas y aún sin registrar salida.'
+          ? 'Visitas programadas aún sin registrar salida.'
           : 'Visitas programadas aún sin registrar salida.'
       )}
       ${kpi(
         '% con foto',
         `${fotoPct}%`,
         personalDash
-          ? 'De las visitas que cerré, cuántas llevan foto.'
+          ? 'De las visitas cerradas, cuántas llevan foto.'
           : 'De las visitas cerradas, cuántas llevan foto.'
       )}
       ${kpi(
         'Reportes tardíos',
         tardias,
         personalDash
-          ? 'Visitas que reporté después del día esperado.'
+          ? 'Visitas reportadas después del día esperado.'
           : 'Visitas reportadas después del día esperado.'
       )}
       ${kpi(
         '% tardíos',
         `${tardioPct}%`,
         personalDash
-          ? 'Qué porcentaje de mis visitas reporté tarde.'
+          ? 'Qué porcentaje de visitas se reportó tarde.'
           : 'Qué porcentaje de visitas se reportó tarde.'
       )}
       ${
@@ -1946,18 +2053,18 @@ function renderDashboard() {
     <div class="mt-5 grid gap-4 lg:grid-cols-2">
       ${chartCard(
         personalDash
-          ? '¿Cuántas salidas y visitas hice por día?'
+          ? '¿Cuántas salidas y visitas hubo por día?'
           : '¿Cuántas salidas y visitas hubo por día?',
         personalDash
-          ? 'Cada punto es un día. Rojo = mis salidas. Verde = visitas que ya cerré.'
+          ? 'Cada punto es un día. Rojo = salidas. Verde = visitas ya cerradas.'
           : 'Cada punto es un día. Rojo = salidas registradas. Verde = visitas ya cerradas.',
         'chart-actividad',
         true
       )}
       ${chartCard(
-        personalDash ? '¿Cuántos kilómetros recorrí por día?' : '¿Cuántos kilómetros se recorrieron por día?',
+        personalDash ? '¿Cuántos kilómetros por día?' : '¿Cuántos kilómetros se recorrieron por día?',
         personalDash
-          ? 'Suma de mis kilómetros GPS del día (solo visitas que ya cerré).'
+          ? 'Suma de kilómetros GPS del día (solo visitas cerradas).'
           : 'Suma de kilómetros GPS del día (solo visitas ya cerradas).',
         'chart-km-dia'
       )}
@@ -1978,19 +2085,19 @@ function renderDashboard() {
       }
       ${chartCard(
         personalDash
-          ? '¿Cuál es el mayor motivo por el que visito a clientes?'
+          ? '¿Cuál es el motivo más frecuente de visita?'
           : '¿Por qué motivo visitan?',
         personalDash
-          ? 'Tipos de visita que más he utilizado cuando cierro reportes.'
+          ? 'Tipos de visita más usados al cerrar reportes.'
           : 'Tipos de visita más usados cuando cierran el reporte.',
         'chart-tipos'
       )}
       ${chartCard(
         personalDash
-          ? '¿Qué día de la semana visito más?'
+          ? '¿Qué día de la semana hay más visitas?'
           : '¿Qué día de la semana visitan más?',
         personalDash
-          ? 'En qué días de la semana cierro más visitas (domingo a sábado).'
+          ? 'En qué días de la semana se cierran más visitas (domingo a sábado).'
           : 'Cuántas visitas cerradas caen en cada día (domingo a sábado).',
         'chart-semana'
       )}
@@ -2048,10 +2155,10 @@ function renderDashboard() {
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Panel de resultados</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va mi trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
+      <h2 class="mt-1 text-xl font-black text-slate-900 sm:text-2xl">${personalDash ? '¿Cómo va el trabajo de campo?' : '¿Cómo va el trabajo de campo?'}</h2>
       <p class="mt-1 max-w-3xl text-sm text-slate-500">${
         personalDash
-          ? 'Solo veo mis salidas y visitas. Global es el total; Clientes filtra uno concreto.'
+          ? 'Resumen de salidas y visitas. Global es el total del periodo; Clientes filtra uno concreto.'
           : 'Números claros. Use Global para el resumen y Ejecutivos para el detalle persona por persona.'
       }</p>
     </div>
@@ -2536,8 +2643,8 @@ function renderMisSolicitudes() {
     `
     <form id="form-solicitud-cliente" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Complete los datos del <strong>cliente activo</strong> que desea sumar a su cartera. Se notificará a su jefe de ventas
-        ${user.correo_jefe ? `(${escapeHtml(user.correo_jefe)})` : ''} para aprobar o rechazar.
+        Solicite sumar un <strong>cliente activo</strong> a su cartera. Su jefe de ventas lo verá en la bandeja de solicitudes
+        para aprobar o rechazar. Al aprobarse, el cliente quedará disponible para salidas, visitas y citas.
       </div>
       ${field('Nombre del cliente (empresa)', 'nombre', { placeholder: 'Ej. Distribuidora ABC' })}
       ${field('Código (opcional)', 'codigo', { required: false, placeholder: 'Ej. CLI-001' })}
@@ -2608,9 +2715,9 @@ function renderMisSolicitudes() {
         pais: session.pais || '',
         accion: 'nueva_solicitud',
       });
-      showToast('Solicitud enviada. Su jefe recibirá la notificación para aprobar.');
+      showToast('Solicitud enviada. Su jefe la verá en la bandeja para aprobar.');
     } catch {
-      showToast('La solicitud quedó registrada, pero no se pudo notificar por correo. Avise a su jefe.', 'err');
+      showToast('Solicitud registrada. Su jefe la verá en la bandeja de la app.');
     }
     go('/solicitudes', { replace: true, animate: false });
   });
