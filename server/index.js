@@ -591,6 +591,7 @@ const FORMULARIOS = new Set([
   'reportes_visitas',
   'solicitud_reintegro',
   'solicitud_cliente',
+  'programar_cita',
 ]);
 
 async function sendSolicitudClienteEmail(body) {

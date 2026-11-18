@@ -194,11 +194,19 @@ export function listClientContacts(client) {
   return out;
 }
 
+/** NIT / tax id: solo alfanumérico en mayúsculas para comparar duplicados. */
+export function normalizeNit(raw) {
+  return String(raw || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase();
+}
+
 export function normalizeClient(c) {
   const pais = String(c.pais || '').trim().toUpperCase();
   const contactos = (Array.isArray(c.contactos) ? c.contactos : [])
     .map(normalizeContactEntry)
     .filter(Boolean);
+  const nitRaw = String(c.nit || '').trim();
   return {
     id: c.id || createId('cli'),
     codigo: String(c.codigo || '').trim(),
@@ -209,6 +217,8 @@ export function normalizeClient(c) {
     correo_contacto: String(c.correo_contacto || '').trim(),
     contacto_rol: String(c.contacto_rol || '').trim(),
     contactos,
+    nit: nitRaw,
+    nitKey: normalizeNit(nitRaw || c.nitKey || ''),
     gg: normalizeRole(c.gg),
     go: normalizeRole(c.go),
     gf: normalizeRole(c.gf),
@@ -548,9 +558,59 @@ export function getProspectosDe(user) {
   return getActiveClients(user).filter((c) => c.tipo === 'prospecto');
 }
 
-/** Prospecto libre: nace usable en salidas, sin aprobación ni tocar la cartera de clientes. */
-export function createProspect({ nombre, contacto, telefono, ubicacion, notas }, seller) {
+/** Busca prospectos/clientes con el mismo NIT (mismo país si se indica). */
+export function findByNit(nit, { pais = '', soloProspectos = true } = {}) {
+  const key = normalizeNit(nit);
+  if (!key) return [];
+  const paisNorm = String(pais || '').trim().toUpperCase();
+  return (getState().clients || []).filter((c) => {
+    if (c.activo === false) return false;
+    if (soloProspectos && c.tipo !== 'prospecto') return false;
+    const cKey = c.nitKey || normalizeNit(c.nit);
+    if (cKey !== key) return false;
+    if (paisNorm && c.pais && c.pais !== paisNorm) return false;
+    return true;
+  });
+}
+
+/**
+ * Crea o reutiliza un prospecto de contacto.
+ * - Si el NIT ya es del mismo vendedor → reutiliza.
+ * - Si el NIT es de otro vendedor (mismo país) → conflict (no crea).
+ */
+export function createProspect(
+  { nombre, contacto, telefono, ubicacion, notas, nit },
+  seller
+) {
   const state = ensureMemory();
+  const nitRaw = String(nit || '').trim();
+  const nitKey = normalizeNit(nitRaw);
+  if (nitKey) {
+    const matches = findByNit(nitKey, { pais: seller?.pais || '' });
+    const mine = matches.find((c) => c.vendedorId === seller.id);
+    if (mine) {
+      let changed = false;
+      if (nombre && mine.nombre !== String(nombre).trim()) {
+        mine.nombre = String(nombre).trim();
+        changed = true;
+      }
+      if (contacto != null && String(contacto).trim() && mine.contacto !== String(contacto).trim()) {
+        mine.contacto = String(contacto).trim();
+        changed = true;
+      }
+      if (telefono != null && String(telefono).trim() && mine.telefono !== String(telefono).trim()) {
+        mine.telefono = String(telefono).trim();
+        changed = true;
+      }
+      if (changed) save(state);
+      return { state: getState(), prospect: mine, reused: true, conflict: null };
+    }
+    const other = matches.find((c) => c.vendedorId && c.vendedorId !== seller.id);
+    if (other) {
+      return { state: getState(), prospect: null, reused: false, conflict: other };
+    }
+  }
+
   const prospect = normalizeClient({
     id: createId('cli'),
     nombre,
@@ -558,6 +618,7 @@ export function createProspect({ nombre, contacto, telefono, ubicacion, notas },
     telefono: telefono || '',
     ubicacion: ubicacion || '',
     notas: notas || '',
+    nit: nitRaw,
     pais: seller?.pais || '',
     vendedorId: seller.id,
     vendedorNombre: seller.nombre,
@@ -568,7 +629,7 @@ export function createProspect({ nombre, contacto, telefono, ubicacion, notas },
   });
   state.clients.push(prospect);
   save(state);
-  return { state: getState(), prospect };
+  return { state: getState(), prospect, reused: false, conflict: null };
 }
 
 export function getEjecutivos() {

@@ -34,6 +34,9 @@ import {
   markNotificationsRead,
   isCatalogoClientesActivo,
   getClientesDe,
+  getProspectosDe,
+  createProspect,
+  normalizeNit,
   getTeamVendedores,
   createCita,
   getCitasForUser,
@@ -416,7 +419,20 @@ const ICONS = {
   usuarios: `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>`,
 };
 
-function actionCard(path, title, desc, iconKey) {
+function actionCard(path, title, desc, iconKey, { disabled = false, badge = '' } = {}) {
+  if (disabled) {
+    return `
+    <div class="flex h-full min-h-[132px] w-full flex-col rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-left opacity-70 sm:p-4" aria-disabled="true">
+      <div class="mb-3 flex items-start justify-between gap-2">
+        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200 text-slate-400">
+          ${ICONS[iconKey] || ''}
+        </div>
+        ${badge ? `<span class="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">${escapeHtml(badge)}</span>` : ''}
+      </div>
+      <div class="text-sm font-black leading-tight text-slate-500 sm:text-[15px]">${title}</div>
+      <p class="mt-1 text-[11px] leading-snug text-slate-400 sm:text-xs">${desc}</p>
+    </div>`;
+  }
   return `
     <button data-nav="${path}" class="card-lift group flex h-full min-h-[132px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-3.5 text-left shadow-sm sm:p-4">
       <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600 transition group-hover:bg-red-600 group-hover:text-white">
@@ -677,12 +693,19 @@ function renderHome() {
         isJefe(user) ? 'Visitas y pendientes de su equipo.' : 'Sus visitas, salidas y métricas.',
         'solicitudes'
       )}
-      ${actionCard(
-        '/solicitudes',
-        isJefe(user) ? 'Solicitudes del equipo' : 'Mis solicitudes',
-        isJefe(user) ? 'Aprobar o rechazar altas a cartera.' : 'Solicitar agregar un cliente a su cartera.',
-        'solicitudes'
-      )}
+      ${
+        isJefe(user)
+          ? actionCard(
+              '/solicitudes',
+              'Solicitudes del equipo',
+              'Aprobar o rechazar altas a cartera.',
+              'solicitudes'
+            )
+          : actionCard('/solicitudes', 'Mis solicitudes', 'Disponible cuando la cartera se conecte con SAN.', 'solicitudes', {
+              disabled: true,
+              badge: 'Próximamente',
+            })
+      }
       ${combustible ? actionCard('/reintegro', 'Reintegro', 'Solicitud del periodo.', 'reintegro') : ''}
     </div>
     ${
@@ -800,8 +823,18 @@ function destinoChooserHtml(basePath, { subtitle = '' } = {}) {
     </section>`;
 }
 
-function prospectoFieldsHtml({ namePrefix = '', required = false } = {}) {
+function prospectoFieldsHtml({ namePrefix = '', required = false, seller = null } = {}) {
   const n = (s) => (namePrefix ? `${namePrefix}${s}` : s);
+  const user = seller || getState().session;
+  const guardados = getProspectosDe(user);
+  const opts =
+    '<option value="">Nuevo prospecto…</option>' +
+    guardados
+      .map(
+        (p) =>
+          `<option value="${escapeHtml(p.id)}" data-nombre="${escapeHtml(p.nombre)}" data-contacto="${escapeHtml(p.contacto || '')}" data-telefono="${escapeHtml(p.telefono || '')}" data-nit="${escapeHtml(p.nit || '')}">${escapeHtml(p.nombre)}${p.nit ? ` · NIT ${escapeHtml(p.nit)}` : ''}</option>`
+      )
+      .join('');
   return `
     <input type="hidden" name="tipo_destino" value="prospecto" />
     <div>
@@ -816,9 +849,19 @@ function prospectoFieldsHtml({ namePrefix = '', required = false } = {}) {
       ${field('Notas de prospección', n('notas_prospecto'), { type: 'textarea', required: false, placeholder: 'Qué busca en esa zona (opcional)' })}
     </div>
     <div id="prospecto-contacto" class="hidden space-y-4">
-      ${field('Empresa o prospecto', n('cliente_registro_salida_p'), { required: false, placeholder: 'Nombre de la empresa / prospecto' })}
-      ${field('Nombre de contacto', n('contacto_registro_salida_p'), { required: false, placeholder: 'Persona de contacto (opcional)' })}
-      ${field('Teléfono', n('telefono_registro_salida_p'), { type: 'tel', required: false })}
+      <div>
+        <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Prospecto en cartera</label>
+        <select name="prospecto_guardado_id" id="prospecto-guardado" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+          ${opts}
+        </select>
+        <p class="mt-1 text-[11px] text-slate-400">Elija uno ya guardado o cree uno nuevo con NIT.</p>
+      </div>
+      <div id="prospecto-nuevo-fields" class="space-y-4">
+        ${field('Empresa o prospecto', n('cliente_registro_salida_p'), { required: false, placeholder: 'Nombre de la empresa / prospecto' })}
+        ${field('NIT', n('nit_prospecto'), { required: false, placeholder: 'NIT de facturación (único)' })}
+        ${field('Nombre de contacto', n('contacto_registro_salida_p'), { required: false, placeholder: 'Persona de contacto (opcional)' })}
+        ${field('Teléfono', n('telefono_registro_salida_p'), { type: 'tel', required: false })}
+      </div>
     </div>`;
 }
 
@@ -826,13 +869,94 @@ function bindProspectoModalidad(root = document) {
   const modSel = root.querySelector('#modalidad-prospecto') || document.getElementById('modalidad-prospecto');
   const pTerr = root.querySelector('#prospecto-territorio') || document.getElementById('prospecto-territorio');
   const pCont = root.querySelector('#prospecto-contacto') || document.getElementById('prospecto-contacto');
+  const guardado = root.querySelector('#prospecto-guardado') || document.getElementById('prospecto-guardado');
+  const nuevoFields = root.querySelector('#prospecto-nuevo-fields') || document.getElementById('prospecto-nuevo-fields');
   const sync = () => {
     const isTerr = modSel?.value !== 'contacto';
     pTerr?.classList.toggle('hidden', !isTerr);
     pCont?.classList.toggle('hidden', isTerr);
+    if (!isTerr) syncProspectoGuardado();
+  };
+  const syncProspectoGuardado = () => {
+    const usingSaved = Boolean(guardado?.value);
+    nuevoFields?.classList.toggle('hidden', usingSaved);
   };
   modSel?.addEventListener('change', sync);
+  guardado?.addEventListener('change', syncProspectoGuardado);
   sync();
+}
+
+/**
+ * Resuelve datos de prospección por contacto: prospecto guardado o nuevo con NIT.
+ * Persiste en cartera vía createProspect. Lanza Error con mensaje de UI si falla.
+ */
+function resolveProspectoContacto(data, seller) {
+  const savedId = String(data.prospecto_guardado_id || '').trim();
+  if (savedId) {
+    const existing = getProspectosDe(seller).find((p) => p.id === savedId);
+    if (!existing) throw new Error('El prospecto seleccionado ya no está en su cartera.');
+    return {
+      clienteId: existing.id,
+      clienteNombre: existing.nombre,
+      contacto: existing.contacto || '',
+      telefono: existing.telefono || '',
+      nit: existing.nit || '',
+      prospect: existing,
+    };
+  }
+
+  const nombre = String(data.cliente_registro_salida_p || '').trim();
+  const nit = String(data.nit_prospecto || '').trim();
+  const contacto = String(data.contacto_registro_salida_p || '').trim();
+  const telefono = String(data.telefono_registro_salida_p || '').trim();
+  if (!nombre) throw new Error('Indique el nombre del prospecto o empresa.');
+  if (!normalizeNit(nit)) throw new Error('Indique el NIT del prospecto (evita duplicados).');
+
+  const { prospect, conflict, reused } = createProspect(
+    { nombre, contacto, telefono, nit },
+    seller
+  );
+  if (conflict) {
+    throw new Error(
+      `Ese NIT ya está registrado como prospecto de ${conflict.vendedorNombre || 'otro ejecutivo'} (${conflict.nombre}).`
+    );
+  }
+  return {
+    clienteId: prospect.id,
+    clienteNombre: prospect.nombre,
+    contacto: prospect.contacto || contacto,
+    telefono: prospect.telefono || telefono,
+    nit: prospect.nit || nit,
+    prospect,
+    reused,
+  };
+}
+
+async function notifyCitaMake(cita, creator) {
+  const state = getState();
+  const seller =
+    (state.users || []).find((u) => u.id === cita.vendedorId) ||
+    (creator?.id === cita.vendedorId ? creator : null);
+  try {
+    await sendToMake({
+      formulario: 'programar_cita',
+      cita_id: cita.id,
+      cita_fecha: cita.fecha || '',
+      cita_hora: cita.hora || '',
+      cita_cliente: cita.clienteNombre || '',
+      cita_contacto: cita.contacto || '',
+      cita_telefono: cita.telefono || '',
+      cita_objetivo: cita.objetivo || '',
+      cita_tipo_destino: cita.tipoDestino || 'cliente',
+      cita_vendedor_id: cita.vendedorId || '',
+      cita_vendedor_nombre: cita.vendedorNombre || seller?.nombre || '',
+      cita_vendedor_correo: seller?.correo || '',
+      correo_vendedor: seller?.correo || creator?.correo || '',
+      nombre_vendedor: seller?.nombre || creator?.nombre || '',
+    });
+  } catch (err) {
+    console.warn('programar_cita Make', err);
+  }
 }
 
 function pad2(n) {
@@ -1067,6 +1191,8 @@ function renderSalida() {
 
     const tipoDestino = cita ? 'cliente' : String(data.tipo_destino || 'cliente');
     const modalidad = String(data.modalidad_prospecto || 'territorio');
+    let prospectoId = '';
+    let prospectoNit = '';
     if (tipoDestino === 'prospecto') {
       if (modalidad === 'territorio') {
         const terr = String(data.territorio_prospecto || '').trim();
@@ -1079,11 +1205,12 @@ function renderSalida() {
           data.objetivo_registro_salida = String(data.notas_prospecto);
         }
       } else {
-        const nombre = String(data.cliente_registro_salida_p || '').trim();
-        if (!nombre) throw new Error('Indique el nombre del prospecto o empresa.');
-        data.cliente_registro_salida = nombre;
-        data.contacto_registro_salida = String(data.contacto_registro_salida_p || '').trim();
-        data.telefono_registro_salida = String(data.telefono_registro_salida_p || '').trim();
+        const resolved = resolveProspectoContacto(data, session);
+        data.cliente_registro_salida = resolved.clienteNombre;
+        data.contacto_registro_salida = resolved.contacto;
+        data.telefono_registro_salida = resolved.telefono;
+        prospectoId = resolved.clienteId;
+        prospectoNit = resolved.nit;
       }
     } else {
       const esNuevo = String(data._contacto_nuevo || '') === '1';
@@ -1117,11 +1244,15 @@ function renderSalida() {
       cliente_registro_salida_p: _cp,
       contacto_registro_salida_p: _ctp,
       telefono_registro_salida_p: _tpp,
+      nit_prospecto: _nit,
+      prospecto_guardado_id: _pg,
       ...payload
     } = data;
     payload.fecha_registro_salida = win.fecha;
     payload.tipo_destino = tipoDestino;
     payload.modalidad_prospecto = tipoDestino === 'prospecto' ? modalidad : '';
+    if (prospectoId) payload.prospecto_id = prospectoId;
+    if (prospectoNit) payload.nit_prospecto = prospectoNit;
 
     btn.textContent = 'Obteniendo GPS…';
     const gps = await requireGpsOrPrompt();
@@ -1557,52 +1688,69 @@ function renderCitas() {
 
   if (esProspecto) {
     bindProspectoModalidad(form);
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(form);
-      const modalidad = String(fd.get('modalidad_prospecto') || 'territorio');
-      let clienteNombre = '';
-      let contacto = '';
-      let telefono = '';
-      let objetivo = String(fd.get('objetivo') || '').trim();
-      if (modalidad === 'territorio') {
-        const terr = String(fd.get('territorio_prospecto') || '').trim();
-        if (!terr) {
-          showToast('Indique el territorio o zona de prospección.', 'err');
-          return;
+      const btn = document.getElementById('submit-btn');
+      const original = btn?.textContent;
+      if (btn) btn.disabled = true;
+      try {
+        const fd = new FormData(form);
+        const data = Object.fromEntries([...fd.entries()].map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v]));
+        const modalidad = String(data.modalidad_prospecto || 'territorio');
+        const vendedorId = String(data.vendedorId || user.id);
+        const sellerForProspect =
+          (getState().users || []).find((u) => u.id === vendedorId) || user;
+        let clienteId = '';
+        let clienteNombre = '';
+        let contacto = '';
+        let telefono = '';
+        let objetivo = String(data.objetivo || '').trim();
+        if (modalidad === 'territorio') {
+          const terr = String(data.territorio_prospecto || '').trim();
+          if (!terr) {
+            showToast('Indique el territorio o zona de prospección.', 'err');
+            return;
+          }
+          clienteNombre = `Prospección · ${terr}`;
+          const notas = String(data.notas_prospecto || '').trim();
+          if (!objetivo && notas) objetivo = notas;
+        } else {
+          const resolved = resolveProspectoContacto(data, sellerForProspect);
+          clienteId = resolved.clienteId;
+          clienteNombre = resolved.clienteNombre;
+          contacto = resolved.contacto;
+          telefono = resolved.telefono;
         }
-        clienteNombre = `Prospección · ${terr}`;
-        const notas = String(fd.get('notas_prospecto') || '').trim();
-        if (!objetivo && notas) objetivo = notas;
-      } else {
-        clienteNombre = String(fd.get('cliente_registro_salida_p') || '').trim();
-        if (!clienteNombre) {
-          showToast('Indique el nombre del prospecto o empresa.', 'err');
-          return;
+        const { cita } = createCita(
+          {
+            vendedorId,
+            clienteId,
+            clienteNombre,
+            contacto,
+            telefono,
+            fecha: String(data.fecha || ''),
+            hora: String(data.hora || ''),
+            objetivo,
+            tipoDestino: 'prospecto',
+          },
+          user
+        );
+        if (btn) btn.textContent = 'Agendando…';
+        await notifyCitaMake(cita, user);
+        showToast(
+          jefe && vendedorId !== user.id
+            ? 'Cita programada. El vendedor ya la puede ver.'
+            : 'Cita programada. Recuerde registrar la salida el día de la visita.'
+        );
+        go('/citas');
+      } catch (err) {
+        showToast(err.message || 'No se pudo programar la cita.', 'err');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = original;
         }
-        contacto = String(fd.get('contacto_registro_salida_p') || '').trim();
-        telefono = String(fd.get('telefono_registro_salida_p') || '').trim();
       }
-      createCita(
-        {
-          vendedorId: String(fd.get('vendedorId') || user.id),
-          clienteId: '',
-          clienteNombre,
-          contacto,
-          telefono,
-          fecha: String(fd.get('fecha') || ''),
-          hora: String(fd.get('hora') || ''),
-          objetivo,
-          tipoDestino: 'prospecto',
-        },
-        user
-      );
-      showToast(
-        jefe && String(fd.get('vendedorId')) !== user.id
-          ? 'Cita programada. El vendedor ya la puede ver.'
-          : 'Cita programada. Recuerde registrar la salida el día de la visita.'
-      );
-      go('/citas');
     });
     return;
   }
@@ -1688,43 +1836,58 @@ function renderCitas() {
   fillClientes();
   clienteSel.addEventListener('change', fillPicker);
   picker?.addEventListener('change', applyPicker);
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = new FormData(form);
-    const opt = clienteSel.selectedOptions[0];
-    if (!opt?.value) {
-      showToast('Elija un cliente.', 'err');
-      return;
+    const btn = document.getElementById('submit-btn');
+    const original = btn?.textContent;
+    if (btn) btn.disabled = true;
+    try {
+      const fd = new FormData(form);
+      const opt = clienteSel.selectedOptions[0];
+      if (!opt?.value) {
+        showToast('Elija un cliente.', 'err');
+        return;
+      }
+      const pVal = picker?.value || '';
+      if (!pVal) {
+        showToast('Elija un contacto o «Otro».', 'err');
+        return;
+      }
+      if (pVal === '__otro__' && !String(fd.get('contacto') || '').trim()) {
+        showToast('Escriba el nombre del contacto nuevo.', 'err');
+        return;
+      }
+      const vendedorId = String(fd.get('vendedorId') || user.id);
+      const { cita } = createCita(
+        {
+          vendedorId,
+          clienteId: opt.value,
+          clienteNombre: opt.dataset.nombre || '',
+          contacto: String(fd.get('contacto') || ''),
+          telefono: String(fd.get('telefono') || ''),
+          fecha: String(fd.get('fecha') || ''),
+          hora: String(fd.get('hora') || ''),
+          objetivo: String(fd.get('objetivo') || ''),
+          tipoDestino: 'cliente',
+        },
+        user
+      );
+      if (btn) btn.textContent = 'Agendando…';
+      await notifyCitaMake(cita, user);
+      showToast(
+        jefe && vendedorId !== user.id
+          ? 'Cita programada. El vendedor ya la puede ver.'
+          : 'Cita programada. Recuerde registrar la salida el día de la visita.'
+      );
+      go('/citas');
+    } catch (err) {
+      showToast(err.message || 'No se pudo programar la cita.', 'err');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
     }
-    const pVal = picker?.value || '';
-    if (!pVal) {
-      showToast('Elija un contacto o «Otro».', 'err');
-      return;
-    }
-    if (pVal === '__otro__' && !String(fd.get('contacto') || '').trim()) {
-      showToast('Escriba el nombre del contacto nuevo.', 'err');
-      return;
-    }
-    createCita(
-      {
-        vendedorId: String(fd.get('vendedorId') || user.id),
-        clienteId: opt.value,
-        clienteNombre: opt.dataset.nombre || '',
-        contacto: String(fd.get('contacto') || ''),
-        telefono: String(fd.get('telefono') || ''),
-        fecha: String(fd.get('fecha') || ''),
-        hora: String(fd.get('hora') || ''),
-        objetivo: String(fd.get('objetivo') || ''),
-        tipoDestino: 'cliente',
-      },
-      user
-    );
-    showToast(
-      jefe && String(fd.get('vendedorId')) !== user.id
-        ? 'Cita programada. El vendedor ya la puede ver.'
-        : 'Cita programada. Recuerde registrar la salida el día de la visita.'
-    );
-    go('/citas');
   });
 }
 
@@ -2437,11 +2600,15 @@ function renderCartera() {
   const addOpen = params.get('add') === '1';
   const editingContactId = params.get('cid') || '';
   let clients = getClientesDe(user);
+  let prospectos = getProspectosDe(user);
   if (q) {
     clients = clients.filter((c) =>
       `${c.nombre} ${c.codigo} ${c.contacto} ${c.telefono} ${listClientContacts(c)
         .map((x) => x.nombre)
         .join(' ')}`.toLowerCase().includes(q)
+    );
+    prospectos = prospectos.filter((p) =>
+      `${p.nombre} ${p.nit} ${p.contacto} ${p.telefono}`.toLowerCase().includes(q)
     );
   }
 
@@ -2456,17 +2623,47 @@ function renderCartera() {
     return qs ? `/cartera?${qs}` : '/cartera';
   };
 
+  const prospectosHtml = `
+    <section class="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h3 class="text-xs font-black uppercase tracking-wider text-slate-900">Mis prospectos</h3>
+      <p class="mt-1 text-xs text-slate-500">Se guardan al registrar salida o cita con prospección por contacto (con NIT).</p>
+      <div class="mt-3 space-y-2">
+        ${
+          prospectos.length
+            ? prospectos
+                .map(
+                  (p) => `
+          <div class="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2.5">
+            <div class="text-sm font-bold text-slate-900">${escapeHtml(p.nombre)}</div>
+            <p class="text-[11px] text-slate-600">${[
+              p.nit ? `NIT ${p.nit}` : '',
+              p.contacto || '',
+              p.telefono || '',
+            ]
+              .filter(Boolean)
+              .map((x) => escapeHtml(x))
+              .join(' · ') || 'Sin datos de contacto'}</p>
+          </div>`
+                )
+                .join('')
+            : '<p class="text-sm text-slate-400">Aún no tiene prospectos guardados.</p>'
+        }
+      </div>
+    </section>`;
+
   app.innerHTML = shell(
     `
     <div class="mb-4">
       <p class="text-xs font-bold uppercase tracking-[0.2em] text-red-600">Mi cartera</p>
-      <h2 class="mt-1 text-xl font-black text-slate-900">${clients.length} cliente${clients.length === 1 ? '' : 's'}</h2>
+      <h2 class="mt-1 text-xl font-black text-slate-900">${clients.length} cliente${clients.length === 1 ? '' : 's'}${prospectos.length ? ` · ${prospectos.length} prospecto${prospectos.length === 1 ? '' : 's'}` : ''}</h2>
       <p class="mt-1 text-sm text-slate-500">Toque la tarjeta del cliente para ver y gestionar contactos.</p>
     </div>
+    ${prospectosHtml}
     <form id="form-buscar-cartera" class="mb-3 flex gap-2">
-      <input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Buscar cliente, código o contacto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500" />
+      <input name="q" value="${escapeHtml(params.get('q') || '')}" placeholder="Buscar cliente, código, NIT o contacto" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-500" />
       <button class="rounded-xl bg-slate-900 px-4 py-3 text-xs font-black uppercase text-white">Buscar</button>
     </form>
+    <div class="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Clientes</div>
     <div class="space-y-2">
       ${
         clients.length
@@ -3984,7 +4181,10 @@ function render() {
       break;
     case '/solicitudes':
       if (isJefe(user)) renderAdminSolicitudes('/solicitudes');
-      else renderMisSolicitudes();
+      else {
+        showToast('Mis solicitudes estará disponible cuando se conecte SAN.', 'err');
+        go('/', { replace: true, animate: false });
+      }
       break;
     case '/citas':
       renderCitas();

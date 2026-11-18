@@ -74,6 +74,19 @@ function emptyEnvelope() {
     accion: '',
     motivo: '',
     vendedor: '',
+
+    // D — Programar cita (Outlook vía Make)
+    cita_id: '',
+    cita_fecha: '',
+    cita_hora: '',
+    cita_cliente: '',
+    cita_contacto: '',
+    cita_telefono: '',
+    cita_objetivo: '',
+    cita_tipo_destino: '',
+    cita_vendedor_id: '',
+    cita_vendedor_nombre: '',
+    cita_vendedor_correo: '',
   };
 }
 
