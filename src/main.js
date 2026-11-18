@@ -132,7 +132,7 @@ function showGpsBusy(message = 'Obteniendo ubicación…') {
   el.setAttribute('aria-busy', 'true');
   el.setAttribute('aria-live', 'assertive');
   const hint = isLikelyDesktop()
-    ? 'En computadora puede tardar 20–40 s. Si el navegador pide permiso, pulse Permitir.'
+    ? 'En computadora se usa ubicación por red (rápido). El GPS solo mejora en segundo plano si ya está permitido.'
     : 'Espere un momento. No toque la pantalla hasta que termine.';
   el.innerHTML = `
     <div class="gps-busy-card">
@@ -193,8 +193,35 @@ async function softPromptLocation() {
 
 async function requireGpsOrPrompt() {
   const desktop = isLikelyDesktop();
-  const softAge = desktop ? 300000 : 120000;
-  const softTimeout = desktop ? 45000 : 20000;
+
+  // PC: IP (o GPS si el background ya lo mejoró). Sin cascada larga ni modal de 1 min.
+  if (desktop) {
+    if (!hasUsableLocation()) {
+      showGpsBusy('Obteniendo ubicación por red…');
+      try {
+        const result = await ensureLocationAccess();
+        if (!result.ok || !result.fix) {
+          throw new LocationError(
+            result.error?.message ||
+              'No se pudo obtener ubicación por red. Verifique su conexión e intente de nuevo.',
+            result.error?.code || 'unavailable'
+          );
+        }
+        return result.fix;
+      } finally {
+        hideGpsBusy();
+      }
+    }
+    return getGps({
+      maximumAge: 600000,
+      preferCache: true,
+      allowIpFallback: true,
+      enableHighAccuracy: false,
+    });
+  }
+
+  const softAge = 120000;
+  const softTimeout = 20000;
   if (hasUsableLocation()) {
     showGpsBusy('Capturando ubicación…');
     try {
@@ -207,21 +234,19 @@ async function requireGpsOrPrompt() {
   }
   const ok = await requestLocationFromUi({
     silentOk: true,
-    busyMessage: desktop ? 'Activando ubicación (PC)…' : 'Activando ubicación…',
+    busyMessage: 'Activando ubicación…',
   });
   if (!ok) {
     throw new LocationError(
-      desktop
-        ? 'No se pudo obtener la ubicación en la PC. Active Ubicación de Windows, permita el sitio en el candado y reintente.'
-        : 'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
+      'No se pudo obtener la ubicación. Active el GPS e intente de nuevo.',
       getLocationStatus() === 'denied' ? 'denied' : 'unavailable'
     );
   }
   showGpsBusy('Capturando ubicación…');
   try {
     return await getGps({
-      maximumAge: desktop ? 120000 : 30000,
-      timeout: desktop ? 45000 : 25000,
+      maximumAge: 30000,
+      timeout: 25000,
       enableHighAccuracy: false,
     });
   } finally {

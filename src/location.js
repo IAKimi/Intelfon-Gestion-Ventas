@@ -16,6 +16,8 @@ export class LocationError extends Error {
 let status = 'unknown';
 /** @type {{ latitud: string, longitud: string, accuracy: number|null, at: string, source?: string } | null} */
 let lastFix = null;
+/** Evita múltiples watch/getCurrent en paralelo en PC. */
+let bgGpsStarted = false;
 
 export function getLocationStatus() {
   return status;
@@ -92,6 +94,16 @@ function storeFix(posOrFix, source = 'gps') {
     posOrFix?.coords?.accuracy != null
       ? posOrFix.coords.accuracy
       : posOrFix.accuracy ?? null;
+
+  // No degradar un GPS reciente con un fix por IP.
+  if (source === 'ip' && lastFix?.source === 'gps') {
+    const age = Date.now() - new Date(lastFix.at).getTime();
+    if (Number.isFinite(age) && age >= 0 && age < 10 * 60 * 1000) {
+      status = 'granted';
+      return { ...lastFix };
+    }
+  }
+
   lastFix = {
     latitud: String(lat),
     longitud: String(lon),
@@ -101,6 +113,55 @@ function storeFix(posOrFix, source = 'gps') {
   };
   status = 'granted';
   return { ...lastFix };
+}
+
+/**
+ * En PC: intenta GPS en background solo si el permiso ya está concedido (sin prompt).
+ * Si llega un fix, reemplaza la IP.
+ */
+export function startBackgroundGpsUpgrade() {
+  if (!isLikelyDesktop() || bgGpsStarted) return;
+  if (!navigator.geolocation || !isLocationSecureContext()) return;
+  bgGpsStarted = true;
+
+  void (async () => {
+    try {
+      if (navigator.permissions?.query) {
+        const perm = await navigator.permissions.query({ name: 'geolocation' });
+        if (perm.state !== 'granted') {
+          // No disparar el diálogo de permiso en desktop.
+          bgGpsStarted = false;
+          return;
+        }
+      } else {
+        // Sin Permissions API no sabemos si pedirá prompt: no forzar en PC.
+        bgGpsStarted = false;
+        return;
+      }
+
+      try {
+        await requestPosition({
+          enableHighAccuracy: false,
+          timeout: 10000,
+          maximumAge: 120000,
+        });
+        return;
+      } catch {
+        /* watch corto */
+      }
+      try {
+        await watchForFix({
+          enableHighAccuracy: false,
+          timeout: 20000,
+          maximumAge: 120000,
+        });
+      } catch {
+        /* se mantiene IP */
+      }
+    } catch {
+      /* ignore */
+    }
+  })();
 }
 
 function requestPosition(opts = {}) {
@@ -257,34 +318,53 @@ async function getIpLocationFallback() {
 }
 
 /**
- * Cascada: cache → GPS navegador → watch → IP/red (PC).
- * @param {{ timeout?: number, maximumAge?: number, enableHighAccuracy?: boolean, allowIpFallback?: boolean }} [opts]
+ * Cascada:
+ * - PC: cache (GPS>IP) → IP inmediata → GPS solo en background si ya hay permiso.
+ * - Móvil: cache → GPS → watch → IP.
+ * @param {{ timeout?: number, maximumAge?: number, enableHighAccuracy?: boolean, allowIpFallback?: boolean, preferCache?: boolean }} [opts]
  */
 export async function getGps(opts = {}) {
   const desktop = isLikelyDesktop();
-  const timeout = opts.timeout ?? (desktop ? 25000 : 25000);
-  const maximumAge = opts.maximumAge ?? (desktop ? 300000 : 60000);
+  const timeout = opts.timeout ?? (desktop ? 8000 : 25000);
+  const maximumAge = opts.maximumAge ?? (desktop ? 600000 : 60000);
   const forceHigh = opts.enableHighAccuracy === true;
   const allowIpFallback = opts.allowIpFallback !== false;
+  const preferCache = opts.preferCache !== false;
 
-  if (lastFix?.at) {
+  if (preferCache && lastFix?.at && status === 'granted') {
     const age = Date.now() - new Date(lastFix.at).getTime();
-    if (Number.isFinite(age) && age >= 0 && age <= maximumAge && status === 'granted') {
+    if (Number.isFinite(age) && age >= 0 && age <= maximumAge) {
+      if (desktop) startBackgroundGpsUpgrade();
       return { ...lastFix };
+    }
+    // GPS un poco viejo: mejor que forzar IP lenta / cascada.
+    if (desktop && lastFix.source === 'gps' && age < 30 * 60 * 1000) {
+      startBackgroundGpsUpgrade();
+      return { ...lastFix };
+    }
+  }
+
+  // Desktop: IP primero (rápido para demo/registro). GPS mejora en background.
+  if (desktop && allowIpFallback) {
+    try {
+      const ipFix = await getIpLocationFallback();
+      startBackgroundGpsUpgrade();
+      // Si el background ya dejó GPS, devolver GPS.
+      if (lastFix?.source === 'gps') return { ...lastFix };
+      return ipFix;
+    } catch (err) {
+      startBackgroundGpsUpgrade();
+      if (lastFix && status === 'granted') return { ...lastFix };
+      throw err instanceof LocationError ? err : mapGeoError(err);
     }
   }
 
   const attempts = forceHigh
     ? [{ enableHighAccuracy: true, timeout, maximumAge: 0 }]
-    : desktop
-      ? [
-          { enableHighAccuracy: false, timeout: Math.min(timeout, 18000), maximumAge },
-          { enableHighAccuracy: false, timeout: Math.max(timeout, 20000), maximumAge: 0 },
-        ]
-      : [
-          { enableHighAccuracy: true, timeout, maximumAge: Math.min(maximumAge, 30000) },
-          { enableHighAccuracy: false, timeout: Math.max(timeout, 25000), maximumAge },
-        ];
+    : [
+        { enableHighAccuracy: true, timeout, maximumAge: Math.min(maximumAge, 30000) },
+        { enableHighAccuracy: false, timeout: Math.max(timeout, 25000), maximumAge },
+      ];
 
   let lastErr = null;
   for (const attempt of attempts) {
@@ -293,36 +373,20 @@ export async function getGps(opts = {}) {
     } catch (err) {
       lastErr = err;
       if (err?.code === 'denied' || err?.code === 'unsupported' || err?.code === 'insecure') {
-        // En PC, denied/timeout → intentar IP para no bloquear demo
-        if (allowIpFallback && desktop && err?.code !== 'insecure' && err?.code !== 'unsupported') {
-          break;
-        }
-        if (!allowIpFallback || !desktop) throw err;
+        if (!allowIpFallback) throw err;
         break;
       }
     }
   }
 
-  if (!desktop) {
-    try {
-      return await watchForFix({
-        enableHighAccuracy: true,
-        timeout: Math.max(timeout, 30000),
-        maximumAge: 15000,
-      });
-    } catch (err) {
-      lastErr = err;
-    }
-  } else {
-    try {
-      return await watchForFix({
-        enableHighAccuracy: false,
-        timeout: 20000,
-        maximumAge,
-      });
-    } catch (err) {
-      lastErr = err;
-    }
+  try {
+    return await watchForFix({
+      enableHighAccuracy: true,
+      timeout: Math.max(timeout, 30000),
+      maximumAge: 15000,
+    });
+  } catch (err) {
+    lastErr = err;
   }
 
   if (allowIpFallback) {
@@ -337,7 +401,9 @@ export async function getGps(opts = {}) {
 }
 
 /**
- * Pide permiso / refresca GPS (con fallback IP en PC).
+ * Activa ubicación usable.
+ * PC: IP inmediato + GPS en background si el permiso ya existe.
+ * Móvil: pide GPS con cascada habitual.
  * @returns {Promise<{ ok: boolean, fix?: object, error?: LocationError }>}
  */
 export async function ensureLocationAccess() {
@@ -351,7 +417,7 @@ export async function ensureLocationAccess() {
       ),
     };
   }
-  if (!isLocationSecureContext()) {
+  if (!isLocationSecureContext() && !isLikelyDesktop()) {
     status = 'insecure';
     return {
       ok: false,
@@ -362,10 +428,28 @@ export async function ensureLocationAccess() {
     };
   }
 
+  // Desktop: no esperar GPS del navegador.
+  if (isLikelyDesktop()) {
+    try {
+      if (lastFix && status === 'granted') {
+        startBackgroundGpsUpgrade();
+        return { ok: true, fix: { ...lastFix } };
+      }
+      const fix = await getIpLocationFallback();
+      startBackgroundGpsUpgrade();
+      return { ok: true, fix };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof LocationError ? err : mapGeoError(err),
+      };
+    }
+  }
+
   try {
     if (navigator.geolocation && navigator.permissions?.query) {
       const perm = await navigator.permissions.query({ name: 'geolocation' });
-      if (perm.state === 'denied' && !isLikelyDesktop()) {
+      if (perm.state === 'denied') {
         status = 'denied';
         return {
           ok: false,
@@ -383,8 +467,8 @@ export async function ensureLocationAccess() {
 
   try {
     const fix = await getGps({
-      timeout: isLikelyDesktop() ? 22000 : 25000,
-      maximumAge: isLikelyDesktop() ? 300000 : 60000,
+      timeout: 25000,
+      maximumAge: 60000,
       enableHighAccuracy: false,
       allowIpFallback: true,
     });
@@ -407,7 +491,7 @@ export function locationBannerHtml() {
           <div class="text-sm font-bold text-emerald-900">Ubicación activa${approx ? ' (aproximada por red)' : ''}</div>
           <p class="mt-0.5 text-xs text-emerald-800/80">${
             approx
-              ? 'En esta PC se usó ubicación por red/IP porque el GPS del sistema no respondió. Sirve para registrar; en teléfono será más preciso.'
+              ? 'En PC se usa ubicación por red de inmediato. Si el navegador ya tiene permiso GPS, se mejora sola en segundo plano.'
               : 'Lista para registrar salidas y visitas (PC o teléfono).'
           }</p>
         </div>
@@ -417,18 +501,22 @@ export function locationBannerHtml() {
   const desktop = isLikelyDesktop();
   const messages = {
     denied: desktop
-      ? 'Permiso GPS bloqueado. Igual puede pulsar «Activar ubicación»: en PC se usará ubicación por red si hace falta.'
+      ? 'Permiso GPS bloqueado. En PC igual puede activar ubicación por red (IP) para registrar.'
       : 'No dio permiso de ubicación. Sin eso no se pueden registrar salidas ni visitas.',
     insecure: 'Este sitio necesita HTTPS para usar ubicación.',
     unsupported: 'Este dispositivo no soporta geolocalización.',
     unavailable: desktop
-      ? 'Sin GPS del sistema. Pulse «Activar ubicación» para usar ubicación por red.'
+      ? 'Pulse «Activar ubicación» para tomar ubicación por red (inmediato en PC).'
       : 'Active el GPS del teléfono para continuar.',
     timeout: desktop
-      ? 'GPS tardó demasiado. Pulse «Activar ubicación» otra vez (se usará red si hace falta).'
+      ? 'Pulse «Activar ubicación»: en PC se usa red de inmediato.'
       : 'No se obtuvo GPS a tiempo. Active la ubicación e intente de nuevo.',
-    prompt: 'Se necesita acceso a su ubicación para registrar salidas y visitas.',
-    unknown: 'Pulse «Activar ubicación» para continuar.',
+    prompt: desktop
+      ? 'Pulse «Activar ubicación» para usar red de inmediato (el GPS solo se usa si ya está permitido).'
+      : 'Se necesita acceso a su ubicación para registrar salidas y visitas.',
+    unknown: desktop
+      ? 'Pulse «Activar ubicación» para usar ubicación por red.'
+      : 'Pulse «Activar ubicación» para continuar.',
   };
 
   const text = messages[status] || messages.unknown;
