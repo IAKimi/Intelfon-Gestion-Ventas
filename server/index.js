@@ -191,12 +191,12 @@ async function migrate() {
     ADD COLUMN IF NOT EXISTS export_api_key TEXT NOT NULL DEFAULT ''
   `);
 
-  // Permite rol jefe de ventas.
+  // Roles de campo: vendedor, jefe, servicio al cliente (sac).
   await pool.query(`
     DO $$ BEGIN
       ALTER TABLE users DROP CONSTRAINT IF EXISTS users_rol_check;
       ALTER TABLE users ADD CONSTRAINT users_rol_check
-        CHECK (rol IN ('admin', 'vendedor', 'jefe'));
+        CHECK (rol IN ('admin', 'vendedor', 'jefe', 'sac'));
     EXCEPTION WHEN others THEN NULL;
     END $$;
   `);
@@ -302,10 +302,19 @@ async function getAppPayload(sessionUser = null, full = false) {
         .map((u) => u.id)
     );
     teamIds.add(sessionUser.id);
-    const isJefe = Boolean(me?.es_jefe);
-    clients = clients.filter(
-      (c) => c.vendedorId === sessionUser.id || (isJefe && teamIds.has(c.vendedorId))
-    );
+    const isJefe = Boolean(me?.es_jefe) || me?.rol === 'jefe';
+    const isSac = me?.rol === 'sac';
+    const paisMe = String(me?.pais || '').trim().toUpperCase();
+    if (isSac) {
+      // SAC ve toda la cartera del país (sin cartera asignada).
+      clients = clients.filter(
+        (c) => c.activo !== false && (!paisMe || String(c.pais || '').toUpperCase() === paisMe)
+      );
+    } else {
+      clients = clients.filter(
+        (c) => c.vendedorId === sessionUser.id || (isJefe && teamIds.has(c.vendedorId))
+      );
+    }
     clientRequests = clientRequests.filter(
       (r) => r.vendedorId === sessionUser.id || (isJefe && teamIds.has(r.vendedorId))
     );
@@ -421,7 +430,7 @@ app.post('/api/auth/login', async (req, res) => {
         expectedRole === 'admin'
           ? user.rol === 'admin'
           : expectedRole === 'vendedor'
-            ? user.rol === 'vendedor' || user.rol === 'jefe'
+            ? user.rol === 'vendedor' || user.rol === 'jefe' || user.rol === 'sac'
             : user.rol === expectedRole;
       if (!ok) return res.status(401).json({ error: 'Sin acceso para este rol' });
     }
@@ -496,13 +505,23 @@ const CONTACT_KEYS = [
   'contactos',
 ];
 
-/** Vendedor: contacto de sus clientes + alta libre de prospectos propios. */
-function mergeSellerClientContacts(currentClients, submitted, userId) {
+/** Vendedor: contacto de sus clientes + alta libre de prospectos propios. SAC: contactos de cartera del país. */
+function mergeSellerClientContacts(currentClients, submitted, user) {
   if (!Array.isArray(submitted)) return currentClients;
+  const userId = typeof user === 'string' ? user : user?.id;
+  const isSac = user && typeof user === 'object' && user.rol === 'sac';
+  const paisMe = String(user?.pais || '')
+    .trim()
+    .toUpperCase();
+  const canEdit = (c) => {
+    if (c.vendedorId === userId) return true;
+    if (!isSac) return false;
+    return !paisMe || String(c.pais || '').toUpperCase() === paisMe;
+  };
   const byId = new Map(submitted.map((c) => [c?.id, c]));
   const merged = (currentClients || []).map((c) => {
     const next = byId.get(c.id);
-    if (!next || c.vendedorId !== userId) return c;
+    if (!next || !canEdit(c)) return c;
     const out = { ...c };
     for (const k of CONTACT_KEYS) {
       if (k in next) out[k] = next[k];
@@ -511,7 +530,7 @@ function mergeSellerClientContacts(currentClients, submitted, userId) {
   });
   const known = new Set(merged.map((c) => c.id));
   for (const c of submitted) {
-    if (c?.id && !known.has(c.id) && c.vendedorId === userId && c.tipo === 'prospecto') {
+    if (c?.id && !known.has(c.id) && c.vendedorId === userId && c.tipo === 'prospecto' && !isSac) {
       merged.push(c);
     }
   }
@@ -582,22 +601,34 @@ function teamIdsOf(user, allUsers) {
   );
 }
 
-/** Citas: el jefe crea para su equipo; el vendedor marca la suya como registrada. */
+/** Citas: vendedor/SAC crea las suyas; jefe crea para su equipo; dueño puede editar/reprogramar. */
 function mergeCitas(currentCitas, submitted, user, allUsers) {
   if (!Array.isArray(submitted)) return currentCitas || [];
   const teamIds = teamIdsOf(user, allUsers);
+  teamIds.add(user.id);
   const byId = new Map((currentCitas || []).map((x) => [x.id, x]));
   for (const item of submitted) {
     if (!item?.id) continue;
     const existing = byId.get(item.id);
     if (existing) {
-      if (existing.vendedorId === user.id) {
-        byId.set(item.id, { ...existing, estado: item.estado || existing.estado, salidaId: item.salidaId ?? existing.salidaId });
-      } else if (existing.creadoPorId === user.id) {
-        byId.set(item.id, { ...existing, ...item, creadoPorId: existing.creadoPorId, vendedorId: existing.vendedorId });
+      const owns =
+        existing.vendedorId === user.id ||
+        existing.creadoPorId === user.id ||
+        (user.rol === 'jefe' && teamIds.has(existing.vendedorId));
+      if (owns) {
+        byId.set(item.id, {
+          ...existing,
+          ...item,
+          id: existing.id,
+          creadoPorId: existing.creadoPorId,
+          vendedorId: existing.vendedorId || item.vendedorId,
+        });
       }
-    } else if (teamIds.has(item.vendedorId) && item.creadoPorId === user.id) {
-      byId.set(item.id, { ...item, estado: 'programada' });
+    } else if (
+      item.creadoPorId === user.id &&
+      (item.vendedorId === user.id || teamIds.has(item.vendedorId))
+    ) {
+      byId.set(item.id, { ...item, estado: item.estado || 'programada' });
     }
   }
   return [...byId.values()];
@@ -738,7 +769,7 @@ app.put('/api/state', requireAuth, async (req, res) => {
       catalogos: isAdmin ? body.catalogos || current.catalogos : current.catalogos,
       clients: isAdmin
         ? body.clients || current.clients
-        : mergeSellerClientContacts(current.clients, body.clients, req.user.id),
+        : mergeSellerClientContacts(current.clients, body.clients, req.user),
       contactChanges: isAdmin
         ? Array.isArray(body.contactChanges)
           ? body.contactChanges

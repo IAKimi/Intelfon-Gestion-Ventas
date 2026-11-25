@@ -503,7 +503,7 @@ export async function login(usuario, password, expectedRole = '') {
   const roleOk = (rol) => {
     if (!expectedRole) return true;
     if (expectedRole === 'admin') return rol === 'admin';
-    if (expectedRole === 'vendedor') return rol === 'vendedor' || rol === 'jefe';
+    if (expectedRole === 'vendedor') return rol === 'vendedor' || rol === 'jefe' || rol === 'sac';
     return rol === expectedRole;
   };
   const user = state.users.find(
@@ -518,6 +518,16 @@ export function isJefe(user) {
   if (!user) return false;
   // Solo rol explícito: evita que un vendedor se vea como jefe solo porque alguien lo puso en correo_jefe.
   return user.rol === 'jefe';
+}
+
+/** Servicio al cliente: mismo flujo de visitas, cartera completa del país, sin prospección. */
+export function isSac(user) {
+  return user?.rol === 'sac';
+}
+
+/** Roles de campo (no admin). */
+export function isCampoUser(user) {
+  return user?.rol === 'vendedor' || user?.rol === 'jefe' || user?.rol === 'sac';
 }
 
 export async function logout() {
@@ -567,6 +577,14 @@ export function getActiveClients(forUser = null) {
   const user = forUser || getState().session;
   const all = getState().clients.filter((c) => c.activo !== false);
   if (!user || user.rol === 'admin') return all;
+  // SAC: toda la cartera del país (no tiene cartera asignada).
+  if (user.rol === 'sac') {
+    const pais = String(user.pais || '')
+      .trim()
+      .toUpperCase();
+    if (!pais) return all;
+    return all.filter((c) => String(c.pais || '').toUpperCase() === pais);
+  }
   return all.filter((c) => c.vendedorId === user.id);
 }
 
@@ -1389,6 +1407,19 @@ export function reprogramCita(citaId, { fecha, hora } = {}) {
   if (!cita || cita.estado !== 'programada') return { state: getState(), cita: null };
   if (fecha) cita.fecha = String(fecha).trim();
   if (hora !== undefined) cita.hora = String(hora || '').trim();
+  save(state);
+  return { state: getState(), cita };
+}
+
+/** Edita campos de una cita programada (fecha, hora, contacto, objetivo, etc.). */
+export function updateCita(citaId, patch = {}) {
+  const state = ensureMemory();
+  const cita = (state.citas || []).find((c) => c.id === citaId);
+  if (!cita || cita.estado !== 'programada') return { state: getState(), cita: null };
+  const allowed = ['fecha', 'hora', 'contacto', 'telefono', 'objetivo', 'clienteNombre', 'clienteId'];
+  for (const key of allowed) {
+    if (patch[key] !== undefined) cita[key] = typeof patch[key] === 'string' ? patch[key].trim() : patch[key];
+  }
   save(state);
   return { state: getState(), cita };
 }
