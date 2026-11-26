@@ -871,7 +871,13 @@ app.put('/api/state', requireAuth, async (req, res) => {
               u.sucursal || '',
               u.correo || '',
               u.correo_jefe || '',
-              u.rol === 'admin' ? 'admin' : u.rol === 'jefe' ? 'jefe' : 'vendedor',
+              u.rol === 'admin'
+                ? 'admin'
+                : u.rol === 'jefe'
+                  ? 'jefe'
+                  : u.rol === 'sac'
+                    ? 'sac'
+                    : 'vendedor',
               u.combustible_activo !== false,
               u.activo !== false,
               JSON.stringify(u.tipos_salida || []),
@@ -891,7 +897,13 @@ app.put('/api/state', requireAuth, async (req, res) => {
             u.sucursal || '',
             u.correo || '',
             u.correo_jefe || '',
-            u.rol === 'admin' ? 'admin' : u.rol === 'jefe' ? 'jefe' : 'vendedor',
+            u.rol === 'admin'
+              ? 'admin'
+              : u.rol === 'jefe'
+                ? 'jefe'
+                : u.rol === 'sac'
+                  ? 'sac'
+                  : 'vendedor',
             u.combustible_activo !== false,
             u.activo !== false,
             JSON.stringify(u.tipos_salida || []),
