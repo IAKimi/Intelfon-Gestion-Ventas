@@ -1019,7 +1019,7 @@ function pad2(n) {
 }
 
 function timeToMinutes(hhmm) {
-  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})(?::\d{2})?/);
   if (!m) return null;
   return Number(m[1]) * 60 + Number(m[2]);
 }
@@ -1082,18 +1082,21 @@ function renderSalida() {
       showToast('La cita ya no está disponible.', 'err');
       return;
     }
-    if (c.fecha !== win.fecha) {
-      showToast('Solo puede empezar una cita programada para hoy.', 'err');
-      return;
-    }
     try {
       showToast('Obteniendo GPS…');
       const gps = await requireGpsOrPrompt();
+      // Recalcular ventana al momento del clic (no la del render): si la pantalla
+      // quedó abierta, la hora vieja fallaba el tope de 30 minutos.
+      const nowWin = salidaTimeWindow();
+      if (c.fecha !== nowWin.fecha) {
+        showToast('Solo puede empezar una cita programada para hoy.', 'err');
+        return;
+      }
       const tiposOpts = resolveOptions(user, 'tipos_salida');
       const tipoDefault = tiposOpts[0]?.label || 'Visita';
       const payload = {
-        fecha_registro_salida: win.fecha,
-        hora_registro_salida: win.horaDefault,
+        fecha_registro_salida: nowWin.fecha,
+        hora_registro_salida: nowWin.horaDefault,
         cliente_registro_salida: c.clienteNombre || '',
         contacto_registro_salida: c.contacto || '',
         telefono_registro_salida: c.telefono || '',
@@ -1297,8 +1300,22 @@ function renderSalida() {
 
   bindFormSubmit('form-salida', async (data, btn) => {
     const session = getState().session;
-    assertSalidaTimeWindow(win.fecha, data.hora_registro_salida);
-    data.fecha_registro_salida = win.fecha;
+    const nowWin = salidaTimeWindow();
+    // Si el formulario quedó abierto, forzar hora actual dentro de la ventana.
+    const submittedMins = timeToMinutes(data.hora_registro_salida);
+    const minM = timeToMinutes(nowWin.minHora);
+    const maxM = timeToMinutes(nowWin.maxHora);
+    if (
+      submittedMins == null ||
+      minM == null ||
+      maxM == null ||
+      submittedMins < minM ||
+      submittedMins > maxM
+    ) {
+      data.hora_registro_salida = nowWin.horaDefault;
+    }
+    assertSalidaTimeWindow(nowWin.fecha, data.hora_registro_salida);
+    data.fecha_registro_salida = nowWin.fecha;
 
     const tipoDestino = cita ? 'cliente' : String(data.tipo_destino || 'cliente');
     const modalidad = String(data.modalidad_prospecto || 'territorio');
