@@ -92,11 +92,18 @@ async function go(path, { replace = false, animate = true } = {}) {
   render();
 }
 
+/** Fecha/hora del dispositivo en calendario local (SV/GT = UTC-6; no usar toISOString). */
+function localIsoDay(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function nowParts() {
   const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
   return {
-    fecha: d.toISOString().slice(0, 10),
-    hora: d.toTimeString().slice(0, 5),
+    fecha: localIsoDay(d),
+    hora: `${p(d.getHours())}:${p(d.getMinutes())}`,
   };
 }
 
@@ -1029,14 +1036,15 @@ function minutesToTime(total) {
   return `${pad2(Math.floor(t / 60))}:${pad2(t % 60)}`;
 }
 
-/** Ventana de salida: fecha = hoy; hora entre ahora y ahora+30 min. */
+/** Ventana de salida: fecha = hoy; hora entre ahora y ahora+30 min (sin cruzar medianoche). */
 function salidaTimeWindow() {
   const now = new Date();
-  const fecha = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  const fecha = localIsoDay(now);
   const cur = now.getHours() * 60 + now.getMinutes();
   const minHora = minutesToTime(cur);
-  const maxHora = minutesToTime(cur + 30);
-  return { fecha, minHora, maxHora, horaDefault: minHora };
+  const maxMins = Math.min(cur + 30, 23 * 60 + 59);
+  const maxHora = minutesToTime(maxMins);
+  return { fecha, minHora, maxHora, horaDefault: minHora, wrapsMidnight: cur + 30 > 23 * 60 + 59 };
 }
 
 function assertSalidaTimeWindow(fecha, hora) {
@@ -1075,13 +1083,16 @@ function renderSalida() {
     .filter((c) => c.estado === 'programada')
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
 
+  let empezandoCita = false;
   /** Empezar: registra salida al instante (GPS) sin volver a editar el formulario. */
   async function empezarCitaAhora(citaId) {
+    if (empezandoCita) return;
     const c = getCitaById(citaId);
     if (!c || c.estado !== 'programada') {
       showToast('La cita ya no está disponible.', 'err');
       return;
     }
+    empezandoCita = true;
     try {
       showToast('Obteniendo GPS…');
       const gps = await requireGpsOrPrompt();
@@ -1119,6 +1130,8 @@ function renderSalida() {
       go('/');
     } catch (err) {
       showToast(err.message || 'No se pudo registrar la salida.', 'err');
+    } finally {
+      empezandoCita = false;
     }
   }
 
@@ -1264,8 +1277,8 @@ function renderSalida() {
         ${field('Fecha', 'fecha_registro_salida', { type: 'date', value: win.fecha, disabled: true })}
         <div>
           <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Hora</label>
-          <input name="hora_registro_salida" type="time" required value="${escapeHtml(win.horaDefault)}" min="${escapeHtml(win.minHora)}" max="${escapeHtml(win.maxHora)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
-          <p class="mt-1 text-[11px] text-slate-400">Entre ${escapeHtml(win.minHora)} y ${escapeHtml(win.maxHora)}.</p>
+          <input name="hora_registro_salida" type="time" required value="${escapeHtml(win.horaDefault)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+          <p class="mt-1 text-[11px] text-slate-400">Se registra la hora actual (ventana de 30 minutos). Si la pantalla quedó abierta, se ajusta al enviar.</p>
         </div>
       </div>
       ${destinoBlock}
@@ -1376,7 +1389,7 @@ function renderSalida() {
       prospecto_guardado_id: _pg,
       ...payload
     } = data;
-    payload.fecha_registro_salida = win.fecha;
+    payload.fecha_registro_salida = nowWin.fecha;
     payload.tipo_destino = tipoDestino;
     payload.modalidad_prospecto = tipoDestino === 'prospecto' ? modalidad : '';
     if (prospectoId) payload.prospecto_id = prospectoId;
@@ -1663,7 +1676,7 @@ function renderReintegro() {
   const today = new Date();
   const start = new Date(today);
   start.setDate(today.getDate() - 6);
-  const toDate = (d) => d.toISOString().slice(0, 10);
+  const toDate = (d) => localIsoDay(d);
 
   app.innerHTML = shell(
     `
@@ -2099,17 +2112,19 @@ function renderCitas() {
 function dashboardDayKey(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  // Fecha calendario pura de formularios: no reinterpretar por zona.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
   const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+  if (!Number.isNaN(d.getTime())) return localIsoDay(d);
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  return '';
 }
 
 function dashIsoDay(offsetDays = 0) {
   const d = new Date();
   d.setHours(12, 0, 0, 0);
   d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  return localIsoDay(d);
 }
 
 function renderDashboard() {

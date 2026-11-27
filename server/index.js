@@ -537,6 +537,21 @@ function mergeSellerClientContacts(currentClients, submitted, user) {
   return merged;
 }
 
+/** Admin: une por id sin borrar registros que no traía en su snapshot (evita wipe al guardar). */
+function mergeAdminPreserveById(current, submitted) {
+  if (!Array.isArray(submitted)) return current || [];
+  const byId = new Map();
+  for (const item of current || []) {
+    if (item?.id) byId.set(item.id, item);
+  }
+  for (const item of submitted) {
+    if (!item?.id) continue;
+    const prev = byId.get(item.id);
+    byId.set(item.id, prev ? { ...prev, ...item } : item);
+  }
+  return [...byId.values()];
+}
+
 /** Vendedor: salidas propias (crear / marcar visitada), no toca ajenas. */
 function mergeSellerSalidas(currentSalidas, submitted, userId) {
   if (!Array.isArray(submitted)) return currentSalidas || [];
@@ -752,100 +767,97 @@ app.put('/api/state', requireAuth, async (req, res) => {
     const body = req.body || {};
     const isAdmin = req.user.rol === 'admin';
 
-    const current = await getAppPayload(req.user, true);
-    const next = {
-      combustibleGlobal: isAdmin
-        ? Boolean(body.combustibleGlobal ?? current.combustibleGlobal)
-        : current.combustibleGlobal,
-      catalogoClientesActivo: isAdmin
-        ? Boolean(body.catalogoClientesActivo ?? current.catalogoClientesActivo)
-        : current.catalogoClientesActivo,
-      webhookUrl: isAdmin
-        ? String(body.webhookUrl ?? current.webhookUrl).trim() || DEFAULT_WEBHOOK_URL
-        : current.webhookUrl,
-      correo_ventas: isAdmin
-        ? String(body.correo_ventas ?? current.correo_ventas).trim()
-        : current.correo_ventas,
-      catalogos: isAdmin ? body.catalogos || current.catalogos : current.catalogos,
-      clients: isAdmin
-        ? body.clients || current.clients
-        : mergeSellerClientContacts(current.clients, body.clients, req.user),
-      contactChanges: isAdmin
-        ? Array.isArray(body.contactChanges)
-          ? body.contactChanges
-          : current.contactChanges
-        : mergeSellerContactChanges(
-            current.contactChanges,
-            body.contactChanges,
-            req.user.id,
-            current.clients
-          ),
-      clientRequests: isAdmin
-        ? Array.isArray(body.clientRequests)
-          ? body.clientRequests
-          : current.clientRequests
-        : mergeSellerClientRequests(
-            current.clientRequests,
-            body.clientRequests,
-            current.session || req.user,
-            current.users
-          ),
-      export_api_key: isAdmin
-        ? String(body.export_api_key ?? current.export_api_key ?? '').trim()
-        : current.export_api_key || '',
-      notifications: isAdmin
-        ? Array.isArray(body.notifications)
-          ? body.notifications
-          : current.notifications
-        : mergeSellerNotifications(
-            current.notifications,
-            body.notifications,
-            req.user.id,
-            teamIdsOf(current.session || req.user, current.users)
-          ),
-      salidas: isAdmin
-        ? Array.isArray(body.salidas)
-          ? body.salidas
-          : current.salidas
-        : mergeSellerSalidas(current.salidas, body.salidas, req.user.id),
-      citas: isAdmin
-        ? Array.isArray(body.citas)
-          ? body.citas
-          : current.citas
-        : mergeCitas(current.citas, body.citas, current.session || req.user, current.users),
-    };
+    // Serializa lecturas/escrituras del estado compartido (evita que un sync pise otro).
+    await pool.query('SELECT pg_advisory_lock(87421001)');
+    let next;
+    try {
+      const current = await getAppPayload(req.user, true);
+      next = {
+        combustibleGlobal: isAdmin
+          ? Boolean(body.combustibleGlobal ?? current.combustibleGlobal)
+          : current.combustibleGlobal,
+        catalogoClientesActivo: isAdmin
+          ? Boolean(body.catalogoClientesActivo ?? current.catalogoClientesActivo)
+          : current.catalogoClientesActivo,
+        webhookUrl: isAdmin
+          ? String(body.webhookUrl ?? current.webhookUrl).trim() || DEFAULT_WEBHOOK_URL
+          : current.webhookUrl,
+        correo_ventas: isAdmin
+          ? String(body.correo_ventas ?? current.correo_ventas).trim()
+          : current.correo_ventas,
+        catalogos: isAdmin ? body.catalogos || current.catalogos : current.catalogos,
+        clients: isAdmin
+          ? body.clients || current.clients
+          : mergeSellerClientContacts(current.clients, body.clients, req.user),
+        contactChanges: isAdmin
+          ? mergeAdminPreserveById(current.contactChanges, body.contactChanges)
+          : mergeSellerContactChanges(
+              current.contactChanges,
+              body.contactChanges,
+              req.user.id,
+              current.clients
+            ),
+        clientRequests: isAdmin
+          ? mergeAdminPreserveById(current.clientRequests, body.clientRequests)
+          : mergeSellerClientRequests(
+              current.clientRequests,
+              body.clientRequests,
+              current.session || req.user,
+              current.users
+            ),
+        export_api_key: isAdmin
+          ? String(body.export_api_key ?? current.export_api_key ?? '').trim()
+          : current.export_api_key || '',
+        notifications: isAdmin
+          ? mergeAdminPreserveById(current.notifications, body.notifications)
+          : mergeSellerNotifications(
+              current.notifications,
+              body.notifications,
+              req.user.id,
+              teamIdsOf(current.session || req.user, current.users)
+            ),
+        salidas: isAdmin
+          ? mergeAdminPreserveById(current.salidas, body.salidas)
+          : mergeSellerSalidas(current.salidas, body.salidas, req.user.id),
+        citas: isAdmin
+          ? mergeAdminPreserveById(current.citas, body.citas)
+          : mergeCitas(current.citas, body.citas, current.session || req.user, current.users),
+      };
 
-    await pool.query(
-      `UPDATE app_state SET
-        combustible_global = $1,
-        catalogo_clientes_activo = $2,
-        webhook_url = $3,
-        correo_ventas = $4,
-        catalogos = $5::jsonb,
-        clients = $6::jsonb,
-        client_requests = $7::jsonb,
-        notifications = $8::jsonb,
-        salidas = $9::jsonb,
-        contact_changes = $10::jsonb,
-        citas = $11::jsonb,
-        export_api_key = $12,
-        updated_at = NOW()
-       WHERE id = 1`,
-      [
-        next.combustibleGlobal,
-        next.catalogoClientesActivo,
-        next.webhookUrl,
-        next.correo_ventas,
-        JSON.stringify(next.catalogos),
-        JSON.stringify(next.clients),
-        JSON.stringify(next.clientRequests),
-        JSON.stringify(next.notifications),
-        JSON.stringify(next.salidas),
-        JSON.stringify(next.contactChanges || []),
-        JSON.stringify(next.citas || []),
-        next.export_api_key || '',
-      ]
-    );
+      await pool.query(
+        `UPDATE app_state SET
+          combustible_global = $1,
+          catalogo_clientes_activo = $2,
+          webhook_url = $3,
+          correo_ventas = $4,
+          catalogos = $5::jsonb,
+          clients = $6::jsonb,
+          client_requests = $7::jsonb,
+          notifications = $8::jsonb,
+          salidas = $9::jsonb,
+          contact_changes = $10::jsonb,
+          citas = $11::jsonb,
+          export_api_key = $12,
+          updated_at = NOW()
+         WHERE id = 1`,
+        [
+          next.combustibleGlobal,
+          next.catalogoClientesActivo,
+          next.webhookUrl,
+          next.correo_ventas,
+          JSON.stringify(next.catalogos),
+          JSON.stringify(next.clients),
+          JSON.stringify(next.clientRequests),
+          JSON.stringify(next.notifications),
+          JSON.stringify(next.salidas),
+          JSON.stringify(next.contactChanges || []),
+          JSON.stringify(next.citas || []),
+          next.export_api_key || '',
+        ]
+      );
+    } finally {
+      await pool.query('SELECT pg_advisory_unlock(87421001)');
+    }
 
     if (isAdmin && Array.isArray(body.users)) {
       for (const u of body.users) {
