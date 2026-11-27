@@ -494,6 +494,30 @@ function actionCard(path, title, desc, iconKey, { disabled = false, badge = '' }
   `;
 }
 
+function normalizeClientSearch(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function buildClientSelectOptions(clients, { selected = '', valueAs = 'nombre' } = {}) {
+  return (clients || [])
+    .map((c) => {
+      const contacts = listClientContacts(c);
+      const payload = encodeURIComponent(JSON.stringify(contacts));
+      const value = valueAs === 'id' ? c.id : c.nombre;
+      const label = `${c.codigo ? `${c.codigo} · ` : ''}${c.nombre}`;
+      const isSelected =
+        valueAs === 'id' ? String(c.id) === String(selected) : c.nombre === selected;
+      return `<option value="${escapeHtml(value)}" data-id="${escapeHtml(c.id)}" data-nombre="${escapeHtml(c.nombre)}" data-label="${escapeHtml(label)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" data-correo="${escapeHtml(c.correo_contacto || '')}" data-ubicacion="${escapeHtml(c.ubicacion || '')}" data-contactos="${payload}" ${
+        isSelected ? 'selected' : ''
+      }>${escapeHtml(label)}</option>`;
+    })
+    .join('');
+}
+
 function clientFieldsHtml({
   nameField,
   contactField,
@@ -506,6 +530,7 @@ function clientFieldsHtml({
   items = null,
   withContactPicker = false,
   freeForm = false,
+  valueAs = 'nombre',
 } = {}) {
   const phoneBlock = phoneField
     ? field(phoneLabel, phoneField, {
@@ -525,15 +550,13 @@ function clientFieldsHtml({
   }
 
   const clients = items || getActiveClients();
-  const opts = clients
-    .map((c) => {
-      const contacts = listClientContacts(c);
-      const payload = encodeURIComponent(JSON.stringify(contacts));
-      return `<option value="${escapeHtml(c.nombre)}" data-id="${escapeHtml(c.id)}" data-contacto="${escapeHtml(c.contacto || '')}" data-telefono="${escapeHtml(c.telefono || '')}" data-correo="${escapeHtml(c.correo_contacto || '')}" data-ubicacion="${escapeHtml(c.ubicacion || '')}" data-contactos="${payload}" ${
-        c.nombre === selected ? 'selected' : ''
-      }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`;
-    })
-    .join('');
+  const opts = buildClientSelectOptions(clients, { selected, valueAs });
+  const selectedOpt = clients.find((c) =>
+    valueAs === 'id' ? String(c.id) === String(selected) : c.nombre === selected
+  );
+  const selectedLabel = selectedOpt
+    ? `${selectedOpt.codigo ? `${selectedOpt.codigo} · ` : ''}${selectedOpt.nombre}`
+    : '';
   const picker = withContactPicker
     ? `
     <div>
@@ -544,22 +567,24 @@ function clientFieldsHtml({
       </select>
       <p class="mt-1 text-[11px] text-slate-400">Si elige «Otro», escriba el contacto abajo. Al registrar podrá guardarlo para la próxima vez.</p>
     </div>
-    <input type="hidden" name="_cliente_id" value="" />
+    <input type="hidden" name="_cliente_id" value="${escapeHtml(selectedOpt?.id || '')}" />
     <input type="hidden" name="_contacto_nuevo" value="0" />`
     : '';
   return `
-    <div>
+    <div class="relative" data-client-combobox>
       <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
+      <input type="search" data-client-search autocomplete="off" placeholder="Escriba nombre o código del cliente…" value="${escapeHtml(selectedLabel)}" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
       <select name="${nameField}" required data-client-select="${contactField}" ${
         phoneField ? `data-client-phone="${phoneField}"` : ''
-      } ${withContactPicker ? 'data-with-picker="1"' : ''} class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
+      } ${withContactPicker ? 'data-with-picker="1"' : ''} class="pointer-events-none absolute left-0 top-0 h-0 w-0 opacity-0" tabindex="-1" aria-hidden="true">
         <option value="">Seleccione un cliente</option>
         ${opts || '<option value="" disabled>No hay clientes cargados</option>'}
       </select>
+      <div data-client-results class="absolute left-0 right-0 z-40 mt-1 hidden max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg"></div>
       ${
         !clients.length
-          ? `<p class="mt-1 text-[11px] text-amber-700">Catálogo activo: cargue clientes en Admin o solicite un alta.</p>`
-          : ''
+          ? `<p data-client-count-hint class="mt-1 text-[11px] text-amber-700">Catálogo activo: cargue clientes en Admin o solicite un alta.</p>`
+          : `<p data-client-count-hint class="mt-1 text-[11px] text-slate-400">${clients.length} cliente${clients.length === 1 ? '' : 's'} · escriba para filtrar</p>`
       }
     </div>
     ${picker}
@@ -570,13 +595,16 @@ function clientFieldsHtml({
 
 function bindClientSelect(form, { autofill = true } = {}) {
   form.querySelectorAll('[data-client-select]').forEach((sel) => {
-    const contactName = sel.dataset.clientSelect;
+    if (!sel.hasAttribute('data-client-select')) return;
+    const contactName = sel.dataset.clientSelect || '';
     const phoneName = sel.dataset.clientPhone;
     const withPicker = sel.dataset.withPicker === '1';
+    const box = sel.closest('[data-client-combobox]');
+    const search = box?.querySelector('[data-client-search]');
+    const results = box?.querySelector('[data-client-results]');
     const picker = form.querySelector('[data-contact-picker]');
     const clientIdInput = form.querySelector('[name="_cliente_id"]');
     const nuevoFlag = form.querySelector('[name="_contacto_nuevo"]');
-    if (!contactName) return;
 
     const fillPicker = () => {
       if (!picker) return;
@@ -612,6 +640,7 @@ function bindClientSelect(form, { autofill = true } = {}) {
       }
     };
     const applyContact = () => {
+      if (!contactName) return;
       const contactInput = form.querySelector(`[name="${contactName}"]`);
       const phoneInput = phoneName ? form.querySelector(`[name="${phoneName}"]`) : null;
       if (!withPicker || !picker) {
@@ -640,12 +669,89 @@ function bindClientSelect(form, { autofill = true } = {}) {
       setEditable(phoneInput, false);
     };
 
+    const hideResults = () => results?.classList.add('hidden');
+    const showResults = (query = '') => {
+      if (!results) return;
+      const q = normalizeClientSearch(query);
+      const options = [...sel.options].filter((o) => o.value);
+      const matched = options.filter((o) => {
+        const label = o.dataset.label || o.textContent || '';
+        return !q || normalizeClientSearch(label).includes(q);
+      });
+      if (!matched.length) {
+        results.innerHTML =
+          '<div class="px-3 py-2.5 text-sm text-slate-500">Sin coincidencias. Pruebe otro nombre o código.</div>';
+        results.classList.remove('hidden');
+        return;
+      }
+      const limited = matched.slice(0, 80);
+      results.innerHTML =
+        limited
+          .map(
+            (o) =>
+              `<button type="button" data-client-pick="${escapeHtml(o.value)}" class="block w-full px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-red-50 ${
+                o.value === sel.value ? 'bg-red-50 font-semibold text-red-700' : ''
+              }">${escapeHtml(o.dataset.label || o.textContent || '')}</button>`
+          )
+          .join('') +
+        (matched.length > limited.length
+          ? `<div class="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">Mostrando ${limited.length} de ${matched.length}. Siga escribiendo para acotar.</div>`
+          : '');
+      results.classList.remove('hidden');
+    };
+
+    const selectClientValue = (value) => {
+      sel.value = value || '';
+      const opt = sel.selectedOptions[0];
+      if (search) search.value = opt?.value ? opt.dataset.label || opt.textContent || '' : '';
+      hideResults();
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    if (search && results && box && !box.dataset.comboboxBound) {
+      box.dataset.comboboxBound = '1';
+      search.addEventListener('focus', () => showResults(search.value));
+      search.addEventListener('input', () => {
+        if (sel.value) {
+          const opt = sel.selectedOptions[0];
+          const label = opt?.dataset.label || opt?.textContent || '';
+          if (normalizeClientSearch(search.value) !== normalizeClientSearch(label)) {
+            sel.value = '';
+            if (clientIdInput) clientIdInput.value = '';
+          }
+        }
+        showResults(search.value);
+      });
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          hideResults();
+          search.blur();
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const first = results.querySelector('[data-client-pick]');
+          if (first) selectClientValue(first.getAttribute('data-client-pick'));
+        }
+      });
+      results.addEventListener('mousedown', (e) => {
+        const btn = e.target.closest('[data-client-pick]');
+        if (!btn) return;
+        e.preventDefault();
+        selectClientValue(btn.getAttribute('data-client-pick'));
+      });
+      document.addEventListener('click', (e) => {
+        if (!box.isConnected) return;
+        if (!box.contains(e.target)) hideResults();
+      });
+    }
+
     sel.addEventListener('change', () => {
       fillPicker();
       applyContact();
       const opt = sel.selectedOptions[0];
       const punto = form.querySelector('[name="punto_referencia"]');
       if (punto && opt?.dataset.ubicacion) punto.value = opt.dataset.ubicacion;
+      if (search && opt?.value) search.value = opt.dataset.label || opt.textContent || '';
     });
     picker?.addEventListener('change', applyContact);
     fillPicker();
@@ -1861,21 +1967,14 @@ function renderCitas() {
 
   const destinoFields = esProspecto
     ? `<div class="space-y-4 sm:col-span-2">${prospectoFieldsHtml()}</div>`
-    : `
-        <div class="${jefe ? '' : 'sm:col-span-2'}">
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Cliente</label>
-          <select name="clienteId" required class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-            <option value="">Seleccione un cliente</option>
-          </select>
-        </div>
-        <div>
-          <label class="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Contacto</label>
-          <select name="_contacto_picker" id="cita-contacto-picker" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base sm:text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20">
-            <option value="">Primero elija cliente</option>
-          </select>
-        </div>
-        ${field('Nombre de contacto', 'contacto', { required: false, placeholder: 'Si elige Otro, escríbalo aquí' })}
-        ${field('Teléfono', 'telefono', { type: 'tel', required: false, placeholder: 'Ej. 7777-8888' })}`;
+    : `<div class="${jefe ? '' : 'sm:col-span-2'} space-y-4">${clientFieldsHtml({
+        nameField: 'clienteId',
+        contactField: 'contacto',
+        phoneField: 'telefono',
+        items: [],
+        withContactPicker: true,
+        valueAs: 'id',
+      })}</div>`;
 
   app.innerHTML = shell(
     `
@@ -1972,88 +2071,33 @@ function renderCitas() {
 
   const vendedorSel = form.querySelector('[name="vendedorId"]');
   const clienteSel = form.querySelector('[name="clienteId"]');
-  const picker = form.querySelector('#cita-contacto-picker');
-  const contactInput = form.querySelector('[name="contacto"]');
-  const phoneInput = form.querySelector('[name="telefono"]');
-  const setContactEditable = (editable) => {
-    for (const el of [contactInput, phoneInput]) {
-      if (!el) continue;
-      if (editable) {
-        el.removeAttribute('readonly');
-        el.classList.remove('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
-        el.classList.add('bg-white');
-      } else {
-        el.setAttribute('readonly', 'readonly');
-        el.classList.add('bg-slate-100', 'text-slate-500', 'cursor-not-allowed');
-        el.classList.remove('bg-white');
-      }
-    }
-  };
+  const picker = form.querySelector('[data-contact-picker]');
+  const searchInput = form.querySelector('[data-client-search]');
+  const countHint = form.querySelector('[data-client-count-hint]');
   const fillClientes = () => {
     const vid = vendedorSel?.value || user.id;
     // SAC: cartera completa del país; ventas: cartera del vendedor asignado.
     const clientes = isSac(user)
       ? getClientesDe(user)
       : getClientsByVendedor(vid).filter((c) => c.tipo !== 'prospecto');
+    if (!clienteSel) return;
     clienteSel.innerHTML =
       '<option value="">Seleccione un cliente</option>' +
-      clientes
-        .map((c) => {
-          const contacts = listClientContacts(c);
-          const payload = encodeURIComponent(JSON.stringify(contacts));
-          return `<option value="${c.id}" data-nombre="${escapeHtml(c.nombre)}" data-contactos="${payload}">${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`;
-        })
-        .join('');
-    if (picker) {
-      picker.innerHTML = '<option value="">Primero elija cliente</option>';
+      buildClientSelectOptions(clientes, { valueAs: 'id' });
+    if (searchInput) searchInput.value = '';
+    if (countHint) {
+      countHint.className = clientes.length
+        ? 'mt-1 text-[11px] text-slate-400'
+        : 'mt-1 text-[11px] text-amber-700';
+      countHint.textContent = clientes.length
+        ? `${clientes.length} cliente${clientes.length === 1 ? '' : 's'} · escriba para filtrar`
+        : 'Catálogo activo: cargue clientes en Admin o solicite un alta.';
     }
-    if (contactInput) contactInput.value = '';
-    if (phoneInput) phoneInput.value = '';
-    setContactEditable(false);
+    clienteSel.dispatchEvent(new Event('change', { bubbles: true }));
   };
-  const fillPicker = () => {
-    const opt = clienteSel.selectedOptions[0];
-    let contacts = [];
-    try {
-      contacts = JSON.parse(decodeURIComponent(opt?.dataset.contactos || '%5B%5D'));
-    } catch {
-      contacts = [];
-    }
-    if (!picker) return;
-    picker.innerHTML =
-      '<option value="">Seleccione un contacto</option>' +
-      contacts
-        .map(
-          (c) =>
-            `<option value="${escapeHtml(c.nombre)}" data-telefono="${escapeHtml(c.telefono || '')}">${escapeHtml(c.nombre)}${c.cargo ? ` (${escapeHtml(c.cargo)})` : ''}</option>`
-        )
-        .join('') +
-      '<option value="__otro__">Otro (escribir nuevo)</option>';
-    if (contactInput) contactInput.value = '';
-    if (phoneInput) phoneInput.value = '';
-    setContactEditable(false);
-  };
-  const applyPicker = () => {
-    const pOpt = picker?.selectedOptions[0];
-    if (!pOpt || pOpt.value === '') {
-      setContactEditable(false);
-      return;
-    }
-    if (pOpt.value === '__otro__') {
-      if (contactInput) contactInput.value = '';
-      if (phoneInput) phoneInput.value = '';
-      setContactEditable(true);
-      contactInput?.focus();
-      return;
-    }
-    if (contactInput) contactInput.value = pOpt.value;
-    if (phoneInput) phoneInput.value = pOpt.dataset.telefono || '';
-    setContactEditable(false);
-  };
+  bindClientSelect(form, { autofill: false });
   vendedorSel?.addEventListener?.('change', fillClientes);
   fillClientes();
-  clienteSel.addEventListener('change', fillPicker);
-  picker?.addEventListener('change', applyPicker);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('submit-btn');
@@ -2061,7 +2105,7 @@ function renderCitas() {
     if (btn) btn.disabled = true;
     try {
       const fd = new FormData(form);
-      const opt = clienteSel.selectedOptions[0];
+      const opt = clienteSel?.selectedOptions?.[0];
       if (!opt?.value) {
         showToast('Elija un cliente.', 'err');
         return;
@@ -2302,15 +2346,13 @@ function renderDashboard() {
     return qs ? `${basePath}?${qs}` : basePath;
   };
 
+  const misClientesList = personalDash ? getClientesDe(user) : [];
+  const misClienteSelected = misClientesList.find((c) => c.nombre === clienteSel);
+  const misClienteLabel = misClienteSelected
+    ? `${misClienteSelected.codigo ? `${misClienteSelected.codigo} · ` : ''}${misClienteSelected.nombre}`
+    : '';
   const misClientesOpts = personalDash
-    ? getClientesDe(user)
-        .map(
-          (c) =>
-            `<option value="${escapeHtml(c.nombre)}" ${
-              clienteSel === c.nombre ? 'selected' : ''
-            }>${escapeHtml(c.codigo ? `${c.codigo} · ` : '')}${escapeHtml(c.nombre)}</option>`
-        )
-        .join('')
+    ? buildClientSelectOptions(misClientesList, { selected: clienteSel, valueAs: 'nombre' })
     : '';
 
   const presetActive = (d, h) => desde === d && hasta === h;
@@ -2570,12 +2612,15 @@ function renderDashboard() {
       ${
         personalDash
           ? tabSel === 'clientes'
-            ? `<div class="sm:col-span-2">
+            ? `<div class="relative sm:col-span-2" data-client-combobox>
         <label class="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Cliente</label>
-        <select name="cliente" required class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+        <input type="search" data-client-search autocomplete="off" placeholder="Escriba nombre o código…" value="${escapeHtml(misClienteLabel)}" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20" />
+        <select name="cliente" required data-client-select class="pointer-events-none absolute left-0 top-0 h-0 w-0 opacity-0" tabindex="-1" aria-hidden="true">
           <option value="">Seleccione un cliente</option>
           ${misClientesOpts}
         </select>
+        <div data-client-results class="absolute left-0 right-0 z-40 mt-1 hidden max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg"></div>
+        <p data-client-count-hint class="mt-1 text-[11px] text-slate-400">${misClientesList.length} cliente${misClientesList.length === 1 ? '' : 's'} · escriba para filtrar</p>
       </div>`
             : ''
           : `<div>
@@ -2616,7 +2661,12 @@ function renderDashboard() {
   if (isAdmin) bindAdminSubShell();
   else bindShell('/');
 
-  document.getElementById('dash-filters')?.addEventListener('submit', (e) => {
+  const dashFilters = document.getElementById('dash-filters');
+  if (dashFilters?.querySelector('[data-client-combobox]')) {
+    bindClientSelect(dashFilters, { autofill: false });
+  }
+
+  dashFilters?.addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const q = new URLSearchParams();
